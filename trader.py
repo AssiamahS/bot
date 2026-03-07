@@ -516,10 +516,19 @@ def check_fills(info, address):
                 cost = price * size
                 closed_pnl = float(f.get("closedPnl", 0))
 
-                print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f}")
+                # Calculate fill edge vs mid price
+                ws_book = ws_books.get(coin, {})
+                fill_mid = ws_book.get("mid", price)
+                if side == "B":
+                    edge = fill_mid - price  # positive = bought below mid (good)
+                else:
+                    edge = price - fill_mid  # positive = sold above mid (good)
+                edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
+
+                print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps")
                 emoji = "🟢" if side == "B" else "🔴"
                 rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
-                tg_send(f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | PnL: ${closed_pnl:.4f}")
+                tg_send(f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | Edge: {edge_bps:+.1f}bps")
 
                 # --- ROUND TRIP TRACKING ---
                 leg = trip_tracker.get(coin)
@@ -644,6 +653,10 @@ def write_status():
         "trip_net_pnl": round(sum(t["net"] for t in completed_trips), 6),
         "trip_winners": sum(1 for t in completed_trips if t["net"] >= 0),
         "trip_losers": sum(1 for t in completed_trips if t["net"] < 0),
+        "trip_avg_gross": round(sum(t["gross"] for t in completed_trips) / len(completed_trips), 6) if completed_trips else 0,
+        "trip_avg_fees": round(sum(t["fees"] for t in completed_trips) / len(completed_trips), 6) if completed_trips else 0,
+        "trip_avg_net": round(sum(t["net"] for t in completed_trips) / len(completed_trips), 6) if completed_trips else 0,
+        "trip_fee_ratio": round(sum(t["fees"] for t in completed_trips) / max(sum(t["gross"] for t in completed_trips), 0.0001), 2) if completed_trips else 0,
         "updated_at": time.time(),
     }
     try:
@@ -999,6 +1012,17 @@ def run_cycle(info, exchange, address):
                     try: exchange.cancel(coin, oid)
                     except: pass
 
+        # Print spread capture diagnostic
+        our_spread = sell_levels[0] - buy_levels[0] if buy_levels and sell_levels else 0
+        our_spread_bps = our_spread / mid * 10000 if mid > 0 else 0
+        expected_net = our_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
+        gate_str = ""
+        if not allow_buy:
+            gate_str += " [NO BUY]"
+        if not allow_sell:
+            gate_str += " [NO SELL]"
+        print(f"  Spread: ${our_spread:.{p_dec}f} ({our_spread_bps:.1f}bps) | ExpNet/trip: ${expected_net:.4f} | Skew: {skew_bps:+.1f}bps{gate_str}")
+
         # Print position status
         if pos_size != 0:
             direction = "LONG" if pos_size > 0 else "SHORT"
@@ -1026,7 +1050,19 @@ def run_cycle(info, exchange, address):
     pv = portfolio_value()
     elapsed = time.time() - start_time
     print(f"\n{'='*55}")
-    print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips} | {elapsed/60:.1f}m")
+    # Trip diagnostics
+    trip_stats = ""
+    if completed_trips:
+        avg_gross = sum(t["gross"] for t in completed_trips) / len(completed_trips)
+        avg_fees = sum(t["fees"] for t in completed_trips) / len(completed_trips)
+        avg_net = sum(t["net"] for t in completed_trips) / len(completed_trips)
+        total_gross = sum(t["gross"] for t in completed_trips)
+        total_fees_trip = sum(t["fees"] for t in completed_trips)
+        fee_ratio = total_fees_trip / total_gross if total_gross > 0 else 999
+        winners = sum(1 for t in completed_trips if t["net"] >= 0)
+        win_rate = winners / len(completed_trips) * 100
+        trip_stats = f" | AvgNet: ${avg_net:.4f} WR: {win_rate:.0f}% FeeR: {fee_ratio:.2f}"
+    print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips}{trip_stats} | {elapsed/60:.1f}m")
     print(f"{'='*55}")
     write_status()
 
@@ -1073,7 +1109,16 @@ def main():
             if now - last_status_tg > 120:
                 pv = portfolio_value()
                 pnl = pv - initial_portfolio_value if initial_portfolio_value else 0
-                tg_send(f"📊 <b>HL Status</b>\nPortfolio: ${pv:.2f}\nPnL: {'+'if pnl>=0 else ''}{pnl:.4f}\nFills: {total_trade_count} | Uptime: {(now-start_time)/60:.0f}m")
+                trip_msg = ""
+                if completed_trips:
+                    avg_net = sum(t["net"] for t in completed_trips) / len(completed_trips)
+                    total_trip_pnl = sum(t["net"] for t in completed_trips)
+                    winners = sum(1 for t in completed_trips if t["net"] >= 0)
+                    total_gross = sum(t["gross"] for t in completed_trips)
+                    total_fees_t = sum(t["fees"] for t in completed_trips)
+                    fee_ratio = total_fees_t / total_gross if total_gross > 0 else 999
+                    trip_msg = f"\n📈 Trips: {round_trips} | Net: ${total_trip_pnl:.4f}\nAvg: ${avg_net:.4f} | WR: {winners}/{round_trips} | FeeR: {fee_ratio:.2f}"
+                tg_send(f"📊 <b>HL Status</b>\nPortfolio: ${pv:.2f}\nPnL: {'+'if pnl>=0 else ''}{pnl:.4f}\nFills: {total_trade_count} | Uptime: {(now-start_time)/60:.0f}m{trip_msg}")
                 last_status_tg = now
 
         except Exception as e:
