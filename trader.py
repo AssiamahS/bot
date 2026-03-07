@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Hyperliquid Market Maker.
-Maker rebate (~0.002%) means tight spreads are profitable.
-Posts limit orders at best bid/ask, collects maker rebates on fills.
+Maker fee is 1.5bps at low volume tiers (rebate only at 25M+ monthly).
+Must capture >4bps spread per round trip to profit after fees on both legs.
 Writes status to trader_status.json for dashboard.
 """
 import time
@@ -96,6 +96,10 @@ risk_cooldown_until = 0
 live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
 STALE_BPS = 8  # refresh orders if price moved >8bps from our quote (stay near front)
+MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
+MIN_PROFIT_BPS = 1.0  # minimum profit per round trip after fees
+# Minimum spread we need: 2 * maker_fee + profit margin
+MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 4.0 bps
 
 # Queue quality thresholds
 CROWDED_SIZE = 30  # SOL units at top level = crowded queue
@@ -811,9 +815,26 @@ def run_cycle(info, exchange, address):
         if sell_price <= best_bid:
             sell_price = round(best_bid + tick, p_dec)
 
-        # Ensure minimum spread between our own quotes
+        # Ensure minimum profitable spread between our own quotes
+        # We pay maker fee on BOTH legs, so need: sell - buy > 2 * fee + profit
+        min_capture = mid * MIN_CAPTURE_BPS / 10000  # minimum $ spread needed
+        min_capture_ticks = max(2, round(min_capture / tick))  # at least 2 ticks
+        actual_spread_ticks = round((sell_price - buy_price) / tick) if tick > 0 else 0
+
+        if actual_spread_ticks < min_capture_ticks:
+            # Widen symmetrically around mid to ensure profitability
+            needed_half = (min_capture_ticks * tick) / 2
+            buy_price = round(fair_mid - needed_half - skew, p_dec)
+            sell_price = round(fair_mid + needed_half - skew, p_dec)
+            buy_reason = f"widen for profit ({min_capture_ticks}t)"
+            sell_reason = f"widen for profit ({min_capture_ticks}t)"
+            # Re-check bounds
+            if buy_price >= best_ask:
+                buy_price = round(best_ask - tick, p_dec)
+            if sell_price <= best_bid:
+                sell_price = round(best_bid + tick, p_dec)
         if sell_price <= buy_price:
-            sell_price = round(buy_price + tick, p_dec)
+            sell_price = round(buy_price + min_capture_ticks * tick, p_dec)
 
         # Check existing orders
         existing_buy_px = None
