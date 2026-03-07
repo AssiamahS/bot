@@ -87,7 +87,7 @@ VOL_WINDOW = 20
 
 # Risk governor limits
 MAX_DRAWDOWN = 0.15
-MAX_INVENTORY_USD = 120
+MAX_INVENTORY_USD = 250
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -99,7 +99,7 @@ round_trips = 0  # completed buy+sell cycles
 # A round trip = buy fill followed by sell fill (or vice versa) on same coin
 trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
-STALE_BPS = 8  # refresh orders if price moved >8bps from our quote (stay near front)
+STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 4.5 bps -> 4 ticks on SOL
@@ -124,7 +124,7 @@ ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
 last_quote_time = {}  # coin -> timestamp of last quote update
-MIN_QUOTE_INTERVAL = 0.5  # don't requote faster than 500ms (avoid spam)
+MIN_QUOTE_INTERVAL = 0.25  # don't requote faster than 250ms (fast but not spammy)
 
 # Trade flow tracking (updated by WS trades callback)
 recent_trades = {}  # coin -> deque of {"ts", "px", "sz", "side"}
@@ -366,13 +366,13 @@ def orderbook_imbalance(price_data):
 
 
 def risk_check(equity, vol_bps, inventory_usd):
-    """Risk governor: returns reason string if trading should pause, else None."""
+    """Risk governor: returns reason string if trading should pause, else None.
+    Inventory is handled by side-gating, not cooldown — only pause on drawdown/volatility.
+    """
     if initial_portfolio_value and initial_portfolio_value > 0:
         drawdown = (initial_portfolio_value - equity) / initial_portfolio_value
         if drawdown > MAX_DRAWDOWN:
             return f"drawdown {drawdown*100:.1f}%"
-    if inventory_usd > MAX_INVENTORY_USD:
-        return f"inventory ${inventory_usd:.0f} > ${MAX_INVENTORY_USD}"
     if vol_bps > MAX_VOLATILITY_BPS:
         return f"volatility {vol_bps:.0f}bps"
     return None
@@ -739,8 +739,9 @@ def run_cycle(info, exchange, address):
         risk_reason = risk_check(account_value, vol_bps, pos_usd)
         if risk_reason:
             print(f"\n  {coin} | RISK PAUSE: {risk_reason}")
-            risk_cooldown_until = time.time() + COOLDOWN_SECS
-            tg_send(f"⚠️ <b>RISK PAUSE</b> {coin}: {risk_reason}\nCooldown {COOLDOWN_SECS}s")
+            if time.time() > risk_cooldown_until:
+                risk_cooldown_until = time.time() + COOLDOWN_SECS
+                tg_send(f"⚠️ <b>RISK PAUSE</b> {coin}: {risk_reason}\nCooldown {COOLDOWN_SECS}s")
             continue
 
         # Get existing orders for this coin
@@ -802,6 +803,12 @@ def run_cycle(info, exchange, address):
         if inv_ratio <= -HARD_STOP_THRESHOLD:
             allow_buy = True
             allow_sell = False
+
+        # Extreme inventory: force flatten aggressively instead of freezing
+        if abs(inv_ratio) > 1.1:
+            allow_buy = True
+            allow_sell = True
+            spread_bps += 6
 
         # Defensive spread widening when inventory is heavy
         if abs(inv_ratio) > 0.50:
