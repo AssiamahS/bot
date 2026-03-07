@@ -10,6 +10,7 @@ import json
 import signal
 import os
 import sys
+import threading
 import urllib.request
 import urllib.parse
 from typing import Optional
@@ -91,10 +92,25 @@ COOLDOWN_SECS = 30
 risk_cooldown_until = 0
 
 # Multi-quote state: track our resting orders per coin
-# Key: coin -> {"buy_oid": ..., "sell_oid": ..., "buy_price": ..., "sell_price": ...}
 live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
 STALE_BPS = 15  # only refresh orders if price moved >15bps from our quote
+
+# Queue quality thresholds
+CROWDED_SIZE = 30  # SOL units at top level = crowded queue
+THIN_SIZE = 10     # SOL units at top level = thin (good to join)
+TIGHT_SPREAD_BPS = 6  # below this, spread too tight to compete
+TICK_SIZE = {  # minimum price increment per asset
+    "BTC": 1.0,
+    "ETH": 0.1,
+    "SOL": 0.01,
+}
+
+# WebSocket live book data (updated by WS callbacks)
+ws_book = {}  # coin -> {"bids": [...], "asks": [...], "ts": time}
+ws_book_lock = threading.Lock()
+ws_fills_pending = []  # new fills from WS
+ws_fills_lock = threading.Lock()
 
 
 def signal_handler(sig, frame):
@@ -106,21 +122,80 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
+def on_l2_book(data):
+    """WebSocket callback for L2 book updates."""
+    try:
+        coin = data.get("coin", "")
+        levels = data.get("levels", [])
+        if len(levels) == 2:
+            bids = [{"px": float(l["px"]), "sz": float(l["sz"]), "n": int(l.get("n", 0))} for l in levels[0][:5]]
+            asks = [{"px": float(l["px"]), "sz": float(l["sz"]), "n": int(l.get("n", 0))} for l in levels[1][:5]]
+            with ws_book_lock:
+                ws_book[coin] = {"bids": bids, "asks": asks, "ts": time.time()}
+    except Exception:
+        pass
+
+
+def on_user_fills(data):
+    """WebSocket callback for user fill events."""
+    try:
+        if isinstance(data, list):
+            with ws_fills_lock:
+                ws_fills_pending.extend(data)
+        elif isinstance(data, dict) and "fills" in data:
+            with ws_fills_lock:
+                ws_fills_pending.extend(data["fills"])
+    except Exception:
+        pass
+
+
+def get_ws_book(coin):
+    """Get latest book from WebSocket, return same format as get_mid_price."""
+    with ws_book_lock:
+        book = ws_book.get(coin)
+    if not book or time.time() - book["ts"] > 10:
+        return None  # stale
+    bids = book["bids"]
+    asks = book["asks"]
+    if not bids or not asks:
+        return None
+    best_bid = bids[0]["px"]
+    best_ask = asks[0]["px"]
+    return {
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "mid": (best_bid + best_ask) / 2,
+        "spread": best_ask - best_bid,
+        "bid_size": bids[0]["sz"],
+        "ask_size": asks[0]["sz"],
+        "bid_depth": sum(b["sz"] for b in bids[:3]),
+        "ask_depth": sum(a["sz"] for a in asks[:3]),
+    }
+
+
 def setup_exchange():
-    """Initialize Hyperliquid connection."""
+    """Initialize Hyperliquid connection with WebSocket subscriptions."""
     if not PRIVATE_KEY:
         print("ERROR: Set wallet_private_key in config.json")
-        print("  1. Go to app.hyperliquid.xyz")
-        print("  2. Create an API sub-account (or use your main wallet)")
-        print("  3. Export the private key for the signing wallet")
-        print("  4. Paste it into config.json")
         sys.exit(1)
 
     account = Account.from_key(PRIVATE_KEY)
     address = WALLET_ADDRESS if WALLET_ADDRESS else account.address
 
     base_url = constants.TESTNET_API_URL if USE_TESTNET else constants.MAINNET_API_URL
-    info = Info(base_url, skip_ws=True)
+
+    # Info with WebSocket enabled for live book updates
+    info = Info(base_url, skip_ws=False)
+
+    # Subscribe to L2 book for each coin
+    for pair in PAIRS:
+        coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
+        info.subscribe({"type": "l2Book", "coin": coin}, on_l2_book)
+        print(f"  WS subscribed: {coin} l2Book")
+
+    # Subscribe to user fills
+    info.subscribe({"type": "userFills", "user": address}, on_user_fills)
+    print(f"  WS subscribed: userFills")
 
     # If API wallet != main wallet, pass account_address so SDK signs as agent
     if account.address.lower() != address.lower():
@@ -131,6 +206,9 @@ def setup_exchange():
 
     print(f"  Connected to {'TESTNET' if USE_TESTNET else 'MAINNET'}")
     print(f"  Main wallet: {address}")
+
+    # Wait for initial book data
+    time.sleep(2)
 
     return info, exchange, address
 
@@ -479,7 +557,14 @@ def run_cycle(info, exchange, address):
 
     for pair in PAIRS:
         coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
-        price_data = get_mid_price(info, coin)
+        tick = TICK_SIZE.get(coin, 0.01)
+        p_dec = PRICE_DECIMALS.get(coin, 2)
+        s_dec = SIZE_DECIMALS.get(coin, 2)
+
+        # Use WebSocket book (instant), fall back to REST poll if stale
+        price_data = get_ws_book(coin)
+        if not price_data:
+            price_data = get_mid_price(info, coin)
         if not price_data:
             continue
 
@@ -487,11 +572,13 @@ def run_cycle(info, exchange, address):
         mid = price_data["mid"]
         best_bid = price_data["best_bid"]
         best_ask = price_data["best_ask"]
+        bid_top_size = price_data["bid_size"]
+        ask_top_size = price_data["ask_size"]
+        mkt_spread = price_data["spread"]
+        mkt_spread_bps = mkt_spread / mid * 10000
 
         vol_bps = get_volatility_bps(coin, mid)
         imbalance = orderbook_imbalance(price_data)
-        p_dec = PRICE_DECIMALS.get(coin, 2)
-        s_dec = SIZE_DECIMALS.get(coin, 2)
 
         # Calculate target spread (volatility-adaptive)
         vol_multiplier = 1.0 + min(vol_bps / 10.0, 2.0)
@@ -520,13 +607,14 @@ def run_cycle(info, exchange, address):
 
         # Get existing orders for this coin
         coin_orders = current_orders.get(coin, [])
-        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Vol: {vol_bps:.1f}bps | Spread target: {spread_bps:.0f}bps", end="")
+
+        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Sprd: {mkt_spread_bps:.1f}bps | Vol: {vol_bps:.1f}bps | Bid:{bid_top_size:.1f} Ask:{ask_top_size:.1f}", end="")
         if abs(imbalance) > 0.1:
             print(f" | OB: {imbalance:+.2f}", end="")
         print()
 
         # === STOP-LOSS CHECK ===
-        STOP_LOSS_BPS = 30  # 0.30% max loss before cutting
+        STOP_LOSS_BPS = 30
         if pos_size != 0 and entry_price > 0:
             if pos_size > 0:
                 loss_bps = (entry_price - mid) / entry_price * 10000
@@ -546,33 +634,76 @@ def run_cycle(info, exchange, address):
                 live_quotes.pop(coin, None)
                 continue
 
-        # === MULTI-QUOTE MARKET MAKING ===
-        # Always try to have both a buy and sell resting.
-        # Inventory limits control which sides are allowed.
-        # Only cancel+replace if price drifted too far from our quotes.
+        # === QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
 
-        inventory_usd = pos_size * mid  # positive = long, negative = short
+        inventory_usd = pos_size * mid
         allow_buy = inventory_usd < MAX_INVENTORY_USD
         allow_sell = inventory_usd > -MAX_INVENTORY_USD
 
-        # Skew quotes toward reducing inventory (asymmetric spread)
+        # Skew quotes toward reducing inventory
         skew = 0
         if pos_size != 0:
-            inv_ratio = inventory_usd / MAX_INVENTORY_USD  # -1 to +1
-            skew = inv_ratio * target_spread * 0.5  # shift mid toward reducing
-
-        # Calculate ideal quote prices
-        half_spread = target_spread / 2
-        ideal_buy = round(mid - half_spread - skew, p_dec)
-        ideal_sell = round(mid + half_spread - skew, p_dec)
-
-        # Ensure minimum tick separation
-        if ideal_sell <= ideal_buy:
-            ideal_sell = round(ideal_buy + 10 ** (-p_dec), p_dec)
+            inv_ratio = inventory_usd / MAX_INVENTORY_USD
+            skew = inv_ratio * target_spread * 0.5
 
         quotes = live_quotes.get(coin, {})
 
-        # Check existing buy order
+        # --- SMART BUY PRICE ---
+        # Decide where to place buy based on queue quality
+        if mkt_spread_bps < TIGHT_SPREAD_BPS:
+            # Spread too tight, quote one tick below best bid (don't fight)
+            buy_price = round(best_bid - tick, p_dec)
+            buy_reason = "tight spread, step back"
+        elif bid_top_size > CROWDED_SIZE:
+            # Top level crowded, we'd be buried. Step inside if spread allows, else step back
+            if mkt_spread_bps >= 8:
+                buy_price = round(best_bid + tick, p_dec)
+                buy_reason = "crowded bid, step inside"
+            else:
+                buy_price = round(best_bid - tick, p_dec)
+                buy_reason = "crowded bid, step back"
+        elif bid_top_size < THIN_SIZE and mkt_spread_bps >= 8:
+            # Thin queue + wide spread = step inside for priority
+            buy_price = round(best_bid + tick, p_dec)
+            buy_reason = "thin queue, step inside"
+        else:
+            # Normal conditions, join best bid
+            buy_price = round(best_bid, p_dec)
+            buy_reason = "join bid"
+
+        # Apply inventory skew
+        buy_price = round(buy_price - skew, p_dec)
+        # Safety: don't cross the spread
+        if buy_price >= best_ask:
+            buy_price = round(best_ask - tick, p_dec)
+
+        # --- SMART SELL PRICE ---
+        if mkt_spread_bps < TIGHT_SPREAD_BPS:
+            sell_price = round(best_ask + tick, p_dec)
+            sell_reason = "tight spread, step back"
+        elif ask_top_size > CROWDED_SIZE:
+            if mkt_spread_bps >= 8:
+                sell_price = round(best_ask - tick, p_dec)
+                sell_reason = "crowded ask, step inside"
+            else:
+                sell_price = round(best_ask + tick, p_dec)
+                sell_reason = "crowded ask, step back"
+        elif ask_top_size < THIN_SIZE and mkt_spread_bps >= 8:
+            sell_price = round(best_ask - tick, p_dec)
+            sell_reason = "thin queue, step inside"
+        else:
+            sell_price = round(best_ask, p_dec)
+            sell_reason = "join ask"
+
+        sell_price = round(sell_price - skew, p_dec)
+        if sell_price <= best_bid:
+            sell_price = round(best_bid + tick, p_dec)
+
+        # Ensure minimum spread between our own quotes
+        if sell_price <= buy_price:
+            sell_price = round(buy_price + tick, p_dec)
+
+        # Check existing orders
         existing_buy_px = None
         existing_buy_oid = None
         for o in coin_orders:
@@ -581,7 +712,6 @@ def run_cycle(info, exchange, address):
                 existing_buy_oid = o.get("oid")
                 break
 
-        # Check existing sell order
         existing_sell_px = None
         existing_sell_oid = None
         for o in coin_orders:
@@ -593,27 +723,24 @@ def run_cycle(info, exchange, address):
         # --- BUY SIDE ---
         if allow_buy:
             if existing_buy_px is not None:
-                drift_bps = abs(existing_buy_px - ideal_buy) / mid * 10000
+                drift_bps = abs(existing_buy_px - buy_price) / mid * 10000
                 if drift_bps > STALE_BPS:
-                    # Price moved too far, refresh
                     try: exchange.cancel(coin, existing_buy_oid)
                     except: pass
-                    print(f"  Refresh BUY: ${existing_buy_px:.{p_dec}f} -> ${ideal_buy:.{p_dec}f} ({drift_bps:.0f}bps drift)")
-                    oid = place_order(exchange, coin, True, size, ideal_buy)
+                    print(f"  Refresh BUY: ${existing_buy_px:.{p_dec}f} -> ${buy_price:.{p_dec}f} ({buy_reason}, {drift_bps:.0f}bps drift)")
+                    oid = place_order(exchange, coin, True, size, buy_price)
                     if oid:
                         quotes["buy_oid"] = oid
-                        quotes["buy_price"] = ideal_buy
+                        quotes["buy_price"] = buy_price
                 else:
                     print(f"  BUY resting @ ${existing_buy_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
             else:
-                # No buy order, place one
-                print(f"  Place BUY @ ${ideal_buy:.{p_dec}f}")
-                oid = place_order(exchange, coin, True, size, ideal_buy)
+                print(f"  Place BUY @ ${buy_price:.{p_dec}f} ({buy_reason})")
+                oid = place_order(exchange, coin, True, size, buy_price)
                 if oid:
                     quotes["buy_oid"] = oid
-                    quotes["buy_price"] = ideal_buy
+                    quotes["buy_price"] = buy_price
         else:
-            # Over inventory limit, cancel buy if exists
             if existing_buy_oid:
                 print(f"  Cancel BUY (inventory ${inventory_usd:.0f} >= ${MAX_INVENTORY_USD})")
                 try: exchange.cancel(coin, existing_buy_oid)
@@ -622,23 +749,23 @@ def run_cycle(info, exchange, address):
         # --- SELL SIDE ---
         if allow_sell:
             if existing_sell_px is not None:
-                drift_bps = abs(existing_sell_px - ideal_sell) / mid * 10000
+                drift_bps = abs(existing_sell_px - sell_price) / mid * 10000
                 if drift_bps > STALE_BPS:
                     try: exchange.cancel(coin, existing_sell_oid)
                     except: pass
-                    print(f"  Refresh SELL: ${existing_sell_px:.{p_dec}f} -> ${ideal_sell:.{p_dec}f} ({drift_bps:.0f}bps drift)")
-                    oid = place_order(exchange, coin, False, size, ideal_sell)
+                    print(f"  Refresh SELL: ${existing_sell_px:.{p_dec}f} -> ${sell_price:.{p_dec}f} ({sell_reason}, {drift_bps:.0f}bps drift)")
+                    oid = place_order(exchange, coin, False, size, sell_price)
                     if oid:
                         quotes["sell_oid"] = oid
-                        quotes["sell_price"] = ideal_sell
+                        quotes["sell_price"] = sell_price
                 else:
                     print(f"  SELL resting @ ${existing_sell_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
             else:
-                print(f"  Place SELL @ ${ideal_sell:.{p_dec}f}")
-                oid = place_order(exchange, coin, False, size, ideal_sell)
+                print(f"  Place SELL @ ${sell_price:.{p_dec}f} ({sell_reason})")
+                oid = place_order(exchange, coin, False, size, sell_price)
                 if oid:
                     quotes["sell_oid"] = oid
-                    quotes["sell_price"] = ideal_sell
+                    quotes["sell_price"] = sell_price
         else:
             if existing_sell_oid:
                 print(f"  Cancel SELL (inventory ${inventory_usd:.0f} <= -${MAX_INVENTORY_USD})")
