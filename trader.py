@@ -893,41 +893,30 @@ def run_cycle(info, exchange, address):
 
         quotes = live_quotes.get(coin, {})
 
-        # --- QUOTE PLACEMENT LOGIC ---
-        # Goal: get queue priority by stepping inside spread when profitable.
-        # Rule: only step inside if we keep min_capture_ticks between our buy and sell.
-        min_spread_ticks = round(mkt_spread / tick) if tick > 0 else 1
-        min_capture = fair_mid * MIN_CAPTURE_BPS / 10000
-        min_capture_ticks = max(2, round(min_capture / tick))
+        # --- ADAPTIVE QUOTE PLACEMENT ---
+        # Mode A: Tight market (1-2 ticks) -> join queue, profit from volume
+        # Mode B: Wide market (3+ ticks) -> step inside, capture spread
+        spread_ticks = round(mkt_spread / tick) if tick > 0 else 1
 
-        # Room to step inside = market spread minus our minimum needed spread
-        room_ticks = min_spread_ticks - min_capture_ticks
-
-        if room_ticks >= 2:
-            # Wide spread: step inside on BOTH sides for queue priority
+        if spread_ticks <= 2:
+            # TIGHT MARKET: join best bid/ask for queue priority
+            # Profit comes from high turnover, not per-trade spread
+            buy_price = round(best_bid, p_dec)
+            sell_price = round(best_ask, p_dec)
+            buy_reason = "join (tight)"
+            sell_reason = "join (tight)"
+        else:
+            # WIDE MARKET: step inside spread for queue priority + spread capture
             buy_price = round(best_bid + tick, p_dec)
             sell_price = round(best_ask - tick, p_dec)
             buy_reason = "step inside"
             sell_reason = "step inside"
-        elif room_ticks == 1:
-            # Moderate spread: step inside on one side (prefer the thinner queue)
-            if bid_top_size > ask_top_size:
-                # Bid more crowded, step inside bid for priority
-                buy_price = round(best_bid + tick, p_dec)
-                sell_price = round(best_ask, p_dec)
-                buy_reason = "step inside (crowded bid)"
-                sell_reason = "join ask"
-            else:
-                buy_price = round(best_bid, p_dec)
-                sell_price = round(best_ask - tick, p_dec)
-                buy_reason = "join bid"
-                sell_reason = "step inside (crowded ask)"
-        else:
-            # Tight spread: join best bid/ask, widen later if needed
-            buy_price = round(best_bid, p_dec)
-            sell_price = round(best_ask, p_dec)
-            buy_reason = "join bid"
-            sell_reason = "join ask"
+            # If still very wide, can step in further but keep min 2-tick own spread
+            if spread_ticks >= 6:
+                buy_price = round(best_bid + 2 * tick, p_dec)
+                sell_price = round(best_ask - 2 * tick, p_dec)
+                buy_reason = "step inside x2"
+                sell_reason = "step inside x2"
 
         # Apply inventory skew
         buy_price = round(buy_price - skew_px, p_dec)
@@ -945,32 +934,13 @@ def run_cycle(info, exchange, address):
                 sell_price = flow_ceil
                 sell_reason += f" +flow{flow_shift_applied:+.0f}bp"
 
-        # Safety: don't cross
+        # Safety: never cross the spread (would become taker)
         if buy_price >= best_ask:
             buy_price = round(best_ask - tick, p_dec)
         if sell_price <= best_bid:
             sell_price = round(best_bid + tick, p_dec)
-
-        # Ensure minimum profitable spread between our own quotes
-        # We pay maker fee on BOTH legs, so need: sell - buy > 2 * fee + profit
-        min_capture = mid * MIN_CAPTURE_BPS / 10000  # minimum $ spread needed
-        min_capture_ticks = max(2, round(min_capture / tick))  # at least 2 ticks
-        actual_spread_ticks = round((sell_price - buy_price) / tick) if tick > 0 else 0
-
-        if actual_spread_ticks < min_capture_ticks:
-            # Widen symmetrically around mid to ensure profitability
-            needed_half = (min_capture_ticks * tick) / 2
-            buy_price = round(fair_mid - needed_half - skew_px, p_dec)
-            sell_price = round(fair_mid + needed_half - skew_px, p_dec)
-            buy_reason = f"widen for profit ({min_capture_ticks}t)"
-            sell_reason = f"widen for profit ({min_capture_ticks}t)"
-            # Re-check bounds
-            if buy_price >= best_ask:
-                buy_price = round(best_ask - tick, p_dec)
-            if sell_price <= best_bid:
-                sell_price = round(best_bid + tick, p_dec)
         if sell_price <= buy_price:
-            sell_price = round(buy_price + min_capture_ticks * tick, p_dec)
+            sell_price = round(buy_price + tick, p_dec)
 
         # Build desired price levels
         spacing = LEVEL_SPACING_TICKS * tick
