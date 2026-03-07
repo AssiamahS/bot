@@ -79,16 +79,22 @@ pair_trade_count = {p: 0 for p in PAIRS}
 total_trade_count = 0
 initial_portfolio_value = None
 
-# Volatility tracking: store recent mid prices per coin to compute short-term vol
+# Volatility tracking
 price_history = {COIN_MAP.get(p, p.replace("-PERP", "")): [] for p in PAIRS}
-VOL_WINDOW = 20  # number of cycles to track (~5 min at 15s refresh)
+VOL_WINDOW = 20
 
 # Risk governor limits
-MAX_DRAWDOWN = 0.15       # 15% equity drop -> pause trading
-MAX_INVENTORY_USD = 40    # max exposure per asset before pause
-MAX_VOLATILITY_BPS = 50   # 50bps short-term vol -> pause (0.5% moves)
-COOLDOWN_SECS = 30        # how long to pause when risk triggers
-risk_cooldown_until = 0   # timestamp when cooldown ends
+MAX_DRAWDOWN = 0.15
+MAX_INVENTORY_USD = 40
+MAX_VOLATILITY_BPS = 50
+COOLDOWN_SECS = 30
+risk_cooldown_until = 0
+
+# Ping-pong state: track our open orders so we DON'T cancel take-profits
+# Key: coin -> {"buy_oid": ..., "sell_oid": ..., "buy_price": ..., "sell_price": ..., "size": ...}
+open_grid = {}
+last_fill_count = {}  # track fills per coin to detect new ones
+round_trips = 0  # completed buy+sell cycles
 
 
 def signal_handler(sig, frame):
@@ -434,9 +440,31 @@ def write_status():
         pass
 
 
+def get_open_orders_by_coin(info, address):
+    """Get open orders grouped by coin."""
+    result = {}
+    try:
+        orders = info.open_orders(address)
+        for o in orders:
+            coin = o.get("coin", "")
+            if coin not in result:
+                result[coin] = []
+            result[coin].append(o)
+    except Exception as e:
+        print(f"  Open orders error: {e}")
+    return result
+
+
 def run_cycle(info, exchange, address):
-    """Run one trading cycle."""
-    global active_orders, risk_cooldown_until
+    """Ping-pong trading cycle.
+
+    Instead of cancel-replace every cycle:
+    1. If no position and no orders -> place a BUY at best bid
+    2. When buy fills (we're long) -> place a SELL at buy_price + spread (take profit)
+    3. When sell fills (round trip done) -> place new BUY
+    4. Only cancel+replace if price moved too far from our orders (stale)
+    """
+    global active_orders, risk_cooldown_until, open_grid, round_trips
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
@@ -445,15 +473,12 @@ def run_cycle(info, exchange, address):
         write_status()
         return
 
-    # Cancel existing orders
-    cancel_all_orders(exchange, info, address)
-    active_orders = []
-
-    # Get account state
+    # Get account state and check open orders
     get_account_state(info, address)
     account_value = portfolio_value()
+    current_orders = get_open_orders_by_coin(info, address)
+    active_orders = []  # rebuild for dashboard
 
-    # Get prices and place orders
     for pair in PAIRS:
         coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
         price_data = get_mid_price(info, coin)
@@ -464,57 +489,30 @@ def run_cycle(info, exchange, address):
         mid = price_data["mid"]
         best_bid = price_data["best_bid"]
         best_ask = price_data["best_ask"]
-        market_spread = price_data["spread"]
 
-        # VOLATILITY-ADAPTIVE SPREAD: widen during high vol, tighten during low vol
         vol_bps = get_volatility_bps(coin, mid)
-        # Base spread is MIN_SPREAD_BPS, add up to 2x more when vol is high
-        vol_multiplier = 1.0 + min(vol_bps / 10.0, 2.0)  # vol of 10bps -> 2x spread, 20+ -> 3x
-        adaptive_spread_bps = MIN_SPREAD_BPS * vol_multiplier
-        min_spread = mid * adaptive_spread_bps / 10000
-        half_spread = max(min_spread / 2, market_spread / 2)
-
+        imbalance = orderbook_imbalance(price_data)
         p_dec = PRICE_DECIMALS.get(coin, 2)
         s_dec = SIZE_DECIMALS.get(coin, 2)
 
-        # ORDERBOOK IMBALANCE
-        imbalance = orderbook_imbalance(price_data)
+        # Calculate target spread (volatility-adaptive)
+        vol_multiplier = 1.0 + min(vol_bps / 10.0, 2.0)
+        spread_bps = MIN_SPREAD_BPS * vol_multiplier
+        target_spread = mid * spread_bps / 10000
 
-        # Check current position for inventory management
+        # Size calculation
+        size = round(ORDER_SIZE_USD / mid, s_dec)
+        if size * mid < 10.0:
+            size = round(10.5 / mid, s_dec)
+
+        # Check current position
         positions = last_balances.get("positions", {})
         pos = positions.get(coin, {})
         pos_size = pos.get("size", 0)
         pos_usd = abs(pos_size) * mid
-        max_position_usd = ORDER_SIZE_USD * 3  # allow up to 3x for scalps
+        entry_price = pos.get("entry_price", 0)
 
-        # ASYMMETRIC SPREAD (prop firm style)
-        # Instead of shifting mid, widen the side we DON'T want filled
-        # and tighten the side we DO want filled
-        inventory_skew = 0  # range -1 to +1
-        if pos_size != 0:
-            inventory_skew = max(min(pos_size * mid / max_position_usd, 1.0), -1.0)
-            # positive = long inventory, negative = short inventory
-
-        # Buy spread: wider when long (don't want more), tighter when short (want to buy)
-        # Sell spread: wider when short (don't want more), tighter when long (want to sell)
-        buy_half = half_spread * (1 + inventory_skew * 0.8)   # up to 1.8x when long
-        sell_half = half_spread * (1 - inventory_skew * 0.8)  # up to 1.8x when short
-
-        # Orderbook imbalance nudge (shift both prices in momentum direction)
-        ob_shift = mid * imbalance * 2 / 10000  # up to 2bps shift
-
-        buy_price = round(min(best_bid + (10 ** -p_dec), mid + ob_shift - buy_half), p_dec)
-        sell_price = round(max(best_ask - (10 ** -p_dec), mid + ob_shift + sell_half), p_dec)
-
-        # Ensure order value is above $10 minimum
-        raw_size = ORDER_SIZE_USD / mid
-        size = round(raw_size, s_dec)
-        if size * mid < 10.0:
-            size = round(10.5 / mid, s_dec)
-
-        actual_spread_bps = ((sell_price - buy_price) / mid) * 10000
-
-        # RISK GOVERNOR: check before placing any orders
+        # Risk check
         risk_reason = risk_check(account_value, vol_bps, pos_usd)
         if risk_reason:
             print(f"\n  {coin} | RISK PAUSE: {risk_reason}")
@@ -522,59 +520,117 @@ def run_cycle(info, exchange, address):
             tg_send(f"⚠️ <b>RISK PAUSE</b> {coin}: {risk_reason}\nCooldown {COOLDOWN_SECS}s")
             continue
 
-        # QUOTE SCORING: only trade when conditions are favorable
-        score = quote_score(actual_spread_bps, imbalance, vol_bps, inventory_skew)
+        # Get existing orders for this coin
+        coin_orders = current_orders.get(coin, [])
+        has_buy = any(o.get("side", "") == "B" for o in coin_orders)
+        has_sell = any(o.get("side", "") == "A" for o in coin_orders)
+        grid = open_grid.get(coin, {})
 
-        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Spread: {actual_spread_bps:.1f}bps | Vol: {vol_bps:.1f}bps | Score: {score}/4", end="")
-        if abs(inventory_skew) > 0.05:
-            print(f" | Inv: {inventory_skew:+.2f}", end="")
+        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Vol: {vol_bps:.1f}bps | Spread target: {spread_bps:.0f}bps", end="")
         if abs(imbalance) > 0.1:
             print(f" | OB: {imbalance:+.2f}", end="")
         print()
-        print(f"  Buy @ ${buy_price:.{p_dec}f} (half:{buy_half:.{p_dec}f}) | Sell @ ${sell_price:.{p_dec}f} (half:{sell_half:.{p_dec}f}) | Size: {size}")
-        if pos_size != 0:
-            print(f"  Position: {pos_size} (${pos_usd:.2f} {'LONG' if pos_size > 0 else 'SHORT'})")
 
-        if score < 2:
-            print(f"  SKIP QUOTING (score {score}/4 too low)")
-            continue
+        # === PING-PONG LOGIC ===
 
-        # Place buy only if not too long
-        if pos_usd < max_position_usd or pos_size <= 0:
-            if account_value > ORDER_SIZE_USD:
-                place_order(exchange, coin, True, size, buy_price)
+        if pos_size == 0 and not has_buy and not has_sell:
+            # STATE: FLAT, NO ORDERS -> Place initial buy at best bid
+            buy_price = round(best_bid, p_dec)
+            print(f"  PING: Place BUY @ ${buy_price:.{p_dec}f} (waiting for entry)")
+            oid = place_order(exchange, coin, True, size, buy_price)
+            if oid:
+                open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
+                                   "size": size, "buy_oid": oid}
+
+        elif pos_size > 0 and not has_sell:
+            # STATE: LONG, NO SELL -> Buy filled! Place take-profit sell
+            tp_price = round(entry_price + target_spread, p_dec)
+            # Make sure TP is above best ask or at least entry + min spread
+            tp_price = round(max(tp_price, entry_price + mid * MIN_SPREAD_BPS / 10000), p_dec)
+            print(f"  PONG: Long {pos_size} @ ${entry_price:.{p_dec}f} -> SELL TP @ ${tp_price:.{p_dec}f} (+${tp_price - entry_price:.{p_dec}f})")
+            oid = place_order(exchange, coin, False, abs(pos_size), tp_price, reduce_only=True)
+            if oid:
+                open_grid[coin] = {"state": "waiting_sell", "entry": entry_price,
+                                   "tp": tp_price, "size": abs(pos_size), "sell_oid": oid}
+                # Also cancel any stale buys
+                for o in coin_orders:
+                    if o.get("side") == "B":
+                        try: exchange.cancel(coin, o["oid"])
+                        except: pass
+
+        elif pos_size < 0 and not has_buy:
+            # STATE: SHORT, NO BUY -> Sell filled! Place take-profit buy
+            tp_price = round(entry_price - target_spread, p_dec)
+            tp_price = round(min(tp_price, entry_price - mid * MIN_SPREAD_BPS / 10000), p_dec)
+            print(f"  PONG: Short {pos_size} @ ${entry_price:.{p_dec}f} -> BUY TP @ ${tp_price:.{p_dec}f} (+${entry_price - tp_price:.{p_dec}f})")
+            oid = place_order(exchange, coin, True, abs(pos_size), tp_price, reduce_only=True)
+            if oid:
+                open_grid[coin] = {"state": "waiting_buy_close", "entry": entry_price,
+                                   "tp": tp_price, "size": abs(pos_size), "buy_oid": oid}
+                for o in coin_orders:
+                    if o.get("side") == "A":
+                        try: exchange.cancel(coin, o["oid"])
+                        except: pass
+
+        elif pos_size == 0 and (has_buy or has_sell):
+            # STATE: FLAT BUT HAVE ORDERS -> A round trip just completed!
+            round_trips += 1
+            print(f"  ROUND TRIP #{round_trips} COMPLETE! Canceling stale orders and restarting.")
+            tg_send(f"✅ <b>Round Trip #{round_trips}</b> {coin}\nPlacing new entry...")
+            # Cancel leftover orders
+            for o in coin_orders:
+                try: exchange.cancel(coin, o["oid"])
+                except: pass
+            # Place fresh buy
+            buy_price = round(best_bid, p_dec)
+            oid = place_order(exchange, coin, True, size, buy_price)
+            if oid:
+                open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
+                                   "size": size, "buy_oid": oid}
+
         else:
-            print(f"  Skip BUY (already long ${pos_usd:.2f})")
+            # STATE: Have position AND matching order -> waiting for TP fill
+            state = grid.get("state", "?")
+            if pos_size > 0:
+                # Check if our sell is too far from current price (stale)
+                for o in coin_orders:
+                    if o.get("side") == "A":
+                        sell_px = float(o.get("limitPx", 0))
+                        distance_bps = abs(sell_px - mid) / mid * 10000
+                        # Only re-place if TP moved MORE than 50bps from mid (very stale)
+                        if distance_bps > 50:
+                            print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
+                            try: exchange.cancel(coin, o["oid"])
+                            except: pass
+                            tp_price = round(entry_price + target_spread, p_dec)
+                            tp_price = round(max(tp_price, entry_price + mid * MIN_SPREAD_BPS / 10000), p_dec)
+                            place_order(exchange, coin, False, abs(pos_size), tp_price, reduce_only=True)
+                        else:
+                            print(f"  Waiting: long {pos_size} | TP sell @ ${sell_px:.{p_dec}f} ({distance_bps:.0f}bps away)")
+                        break
+            elif pos_size < 0:
+                for o in coin_orders:
+                    if o.get("side") == "B":
+                        buy_px = float(o.get("limitPx", 0))
+                        distance_bps = abs(buy_px - mid) / mid * 10000
+                        if distance_bps > 50:
+                            print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
+                            try: exchange.cancel(coin, o["oid"])
+                            except: pass
+                            tp_price = round(entry_price - target_spread, p_dec)
+                            place_order(exchange, coin, True, abs(pos_size), tp_price, reduce_only=True)
+                        else:
+                            print(f"  Waiting: short {pos_size} | TP buy @ ${buy_px:.{p_dec}f} ({distance_bps:.0f}bps away)")
+                        break
 
-        # Place sell only if not too short
-        if pos_usd < max_position_usd or pos_size >= 0:
-            place_order(exchange, coin, False, size, sell_price)
-        else:
-            print(f"  Skip SELL (already short ${pos_usd:.2f})")
-
-        # IMBALANCE SCALP: when orderbook strongly favors one side,
-        # place an extra aggressive order in that direction
-        SCALP_THRESHOLD = 0.55  # imbalance must be > this to trigger scalp
-        if abs(imbalance) > SCALP_THRESHOLD and pos_usd < max_position_usd:
-            scalp_size = size  # same size as MM orders
-            tp_bps = 15  # take profit at 15bps (0.15%)
-            if imbalance > SCALP_THRESHOLD:
-                # Bullish pressure - aggressive buy
-                scalp_buy = round(best_bid + (10 ** -p_dec), p_dec)
-                scalp_tp = round(scalp_buy * (1 + tp_bps / 10000), p_dec)
-                print(f"  SCALP BUY signal (imb={imbalance:+.2f}) @ ${scalp_buy:.{p_dec}f} -> TP ${scalp_tp:.{p_dec}f}")
-                if account_value > ORDER_SIZE_USD * 2:
-                    oid = place_order(exchange, coin, True, scalp_size, scalp_buy)
-                    if oid:
-                        place_order(exchange, coin, False, scalp_size, scalp_tp, reduce_only=True)
-            elif imbalance < -SCALP_THRESHOLD:
-                # Bearish pressure - aggressive sell
-                scalp_sell = round(best_ask - (10 ** -p_dec), p_dec)
-                scalp_tp = round(scalp_sell * (1 - tp_bps / 10000), p_dec)
-                print(f"  SCALP SELL signal (imb={imbalance:+.2f}) @ ${scalp_sell:.{p_dec}f} -> TP ${scalp_tp:.{p_dec}f}")
-                oid = place_order(exchange, coin, False, scalp_size, scalp_sell)
-                if oid:
-                    place_order(exchange, coin, True, scalp_size, scalp_tp, reduce_only=True)
+        # Track active orders for dashboard
+        for o in current_orders.get(coin, []):
+            side_str = "buy" if o.get("side") == "B" else "sell"
+            active_orders.append({
+                "pair": f"{coin}-PERP", "side": side_str,
+                "volume": float(o.get("sz", 0)), "price": float(o.get("limitPx", 0)),
+                "id": str(o.get("oid", "")),
+            })
 
     # Check fills
     check_fills(info, address)
@@ -585,7 +641,7 @@ def run_cycle(info, exchange, address):
     pv = portfolio_value()
     elapsed = time.time() - start_time
     print(f"\n{'='*55}")
-    print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | {elapsed/60:.1f}m")
+    print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips} | {elapsed/60:.1f}m")
     print(f"{'='*55}")
     write_status()
 
