@@ -13,6 +13,7 @@ import sys
 import threading
 import urllib.request
 import urllib.parse
+from collections import deque
 from typing import Optional
 
 from eth_account import Account
@@ -86,7 +87,7 @@ VOL_WINDOW = 20
 
 # Risk governor limits
 MAX_DRAWDOWN = 0.15
-MAX_INVENTORY_USD = 40
+MAX_INVENTORY_USD = 120
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -94,7 +95,7 @@ risk_cooldown_until = 0
 # Multi-quote state: track our resting orders per coin
 live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
-STALE_BPS = 15  # only refresh orders if price moved >15bps from our quote
+STALE_BPS = 8  # refresh orders if price moved >8bps from our quote (stay near front)
 
 # Queue quality thresholds
 CROWDED_SIZE = 30  # SOL units at top level = crowded queue
@@ -116,6 +117,13 @@ book_changed = threading.Event()
 last_quote_time = {}  # coin -> timestamp of last quote update
 MIN_QUOTE_INTERVAL = 0.5  # don't requote faster than 500ms (avoid spam)
 
+# Trade flow tracking (updated by WS trades callback)
+recent_trades = {}  # coin -> deque of {"ts", "px", "sz", "side"}
+trades_lock = threading.Lock()
+FLOW_WINDOW = 5  # seconds to look back for flow signal
+FLOW_SHIFT_BPS = 3  # max fair value shift from flow (conservative)
+FLOW_WIDEN_BPS = 4  # extra spread during extreme one-way flow
+
 
 def signal_handler(sig, frame):
     global running
@@ -126,9 +134,10 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def on_l2_book(data):
+def on_l2_book(ws_msg):
     """WebSocket callback for L2 book updates. Signals main loop when book changes."""
     try:
+        data = ws_msg.get("data", ws_msg) if isinstance(ws_msg, dict) else ws_msg
         coin = data.get("coin", "")
         levels = data.get("levels", [])
         if len(levels) == 2:
@@ -153,9 +162,10 @@ def on_l2_book(data):
         pass
 
 
-def on_user_fills(data):
+def on_user_fills(ws_msg):
     """WebSocket callback for user fill events."""
     try:
+        data = ws_msg.get("data", ws_msg) if isinstance(ws_msg, dict) else ws_msg
         if isinstance(data, list):
             with ws_fills_lock:
                 ws_fills_pending.extend(data)
@@ -164,6 +174,58 @@ def on_user_fills(data):
                 ws_fills_pending.extend(data["fills"])
     except Exception:
         pass
+
+
+def on_trades(ws_msg):
+    """WebSocket callback for market trades. Tracks aggressive flow.
+    ws_msg format: {"channel": "trades", "data": [{"coin": "SOL", "side": "B", "px": "84.50", "sz": "1.5", ...}]}"""
+    try:
+        trades = ws_msg.get("data", []) if isinstance(ws_msg, dict) else ws_msg
+        if not isinstance(trades, list):
+            trades = [trades]
+        now = time.time()
+        with trades_lock:
+            for t in trades:
+                coin = t.get("coin", "")
+                if not coin:
+                    continue
+                if coin not in recent_trades:
+                    recent_trades[coin] = deque(maxlen=500)
+                recent_trades[coin].append({
+                    "ts": now,
+                    "px": float(t.get("px", 0)),
+                    "sz": float(t.get("sz", 0)),
+                    "side": t.get("side", ""),  # "B" = buyer aggressor, "A" = seller aggressor
+                })
+    except Exception:
+        pass
+
+
+def get_flow_signal(coin, window_secs=None):
+    """Calculate trade flow imbalance over rolling window.
+    Returns (imbalance, buy_volume, sell_volume).
+    imbalance: +1 = all buys, -1 = all sells, 0 = balanced."""
+    if window_secs is None:
+        window_secs = FLOW_WINDOW
+    now = time.time()
+    buys = 0.0
+    sells = 0.0
+
+    with trades_lock:
+        dq = recent_trades.get(coin, deque())
+        for t in dq:
+            if now - t["ts"] <= window_secs:
+                if t["side"] == "B":
+                    buys += t["sz"]
+                else:
+                    sells += t["sz"]
+
+    total = buys + sells
+    if total <= 0:
+        return 0.0, 0.0, 0.0
+
+    imbalance = (buys - sells) / total
+    return imbalance, buys, sells
 
 
 def get_ws_book(coin):
@@ -204,11 +266,12 @@ def setup_exchange():
     # Info with WebSocket enabled for live book updates
     info = Info(base_url, skip_ws=False)
 
-    # Subscribe to L2 book for each coin
+    # Subscribe to L2 book + trades for each coin
     for pair in PAIRS:
         coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
         info.subscribe({"type": "l2Book", "coin": coin}, on_l2_book)
-        print(f"  WS subscribed: {coin} l2Book")
+        info.subscribe({"type": "trades", "coin": coin}, on_trades)
+        print(f"  WS subscribed: {coin} l2Book + trades")
 
     # Subscribe to user fills
     info.subscribe({"type": "userFills", "user": address}, on_user_fills)
@@ -625,9 +688,15 @@ def run_cycle(info, exchange, address):
         # Get existing orders for this coin
         coin_orders = current_orders.get(coin, [])
 
+        # Trade flow signal
+        flow_imb, buy_vol, sell_vol = get_flow_signal(coin)
+        flow_total = buy_vol + sell_vol
+
         print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Sprd: {mkt_spread_bps:.1f}bps | Vol: {vol_bps:.1f}bps | Bid:{bid_top_size:.1f} Ask:{ask_top_size:.1f}", end="")
         if abs(imbalance) > 0.1:
             print(f" | OB: {imbalance:+.2f}", end="")
+        if flow_total > 0:
+            print(f" | Flow:{flow_imb:+.2f} B:{buy_vol:.1f} S:{sell_vol:.1f}", end="")
         print()
 
         # === STOP-LOSS CHECK ===
@@ -651,11 +720,30 @@ def run_cycle(info, exchange, address):
                 live_quotes.pop(coin, None)
                 continue
 
-        # === QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
+        # === FLOW-AWARE QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
 
         inventory_usd = pos_size * mid
         allow_buy = inventory_usd < MAX_INVENTORY_USD
         allow_sell = inventory_usd > -MAX_INVENTORY_USD
+
+        # Shift fair value based on trade flow
+        # Buyers lifting asks -> raise fair value, sellers hitting bids -> lower
+        fair_mid = mid
+        flow_shift_applied = 0
+        if abs(flow_imb) > 0.3 and flow_total > 1.0:
+            # Scale shift: 0.3-1.0 imbalance -> 0 to FLOW_SHIFT_BPS
+            shift_factor = min((abs(flow_imb) - 0.3) / 0.7, 1.0)
+            shift_bps = FLOW_SHIFT_BPS * shift_factor
+            if flow_imb > 0:
+                fair_mid = mid * (1 + shift_bps / 10000)
+            else:
+                fair_mid = mid * (1 - shift_bps / 10000)
+            flow_shift_applied = shift_bps * (1 if flow_imb > 0 else -1)
+
+        # Widen spread during extreme one-way flow (protection)
+        if abs(flow_imb) > 0.6 and flow_total > 5.0:
+            spread_bps += FLOW_WIDEN_BPS
+            target_spread = fair_mid * spread_bps / 10000
 
         # Skew quotes toward reducing inventory
         skew = 0
@@ -688,8 +776,15 @@ def run_cycle(info, exchange, address):
             buy_price = round(best_bid, p_dec)
             buy_reason = "join bid"
 
-        # Apply inventory skew
+        # Apply inventory skew + flow shift
         buy_price = round(buy_price - skew, p_dec)
+        # Flow-adjusted floor: don't quote below fair_mid - half_spread
+        if flow_shift_applied != 0:
+            half_spread = target_spread / 2
+            flow_floor = round(fair_mid - half_spread, p_dec)
+            if buy_price < flow_floor:
+                buy_price = flow_floor
+                buy_reason += f" +flow{flow_shift_applied:+.0f}bp"
         # Safety: don't cross the spread
         if buy_price >= best_ask:
             buy_price = round(best_ask - tick, p_dec)
@@ -713,6 +808,13 @@ def run_cycle(info, exchange, address):
             sell_reason = "join ask"
 
         sell_price = round(sell_price - skew, p_dec)
+        # Flow-adjusted ceiling: don't quote above fair_mid + half_spread
+        if flow_shift_applied != 0:
+            half_spread = target_spread / 2
+            flow_ceil = round(fair_mid + half_spread, p_dec)
+            if sell_price > flow_ceil:
+                sell_price = flow_ceil
+                sell_reason += f" +flow{flow_shift_applied:+.0f}bp"
         if sell_price <= best_bid:
             sell_price = round(best_bid + tick, p_dec)
 
