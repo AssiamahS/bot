@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hyperliquid Trading Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; }
+  .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 20px; color: #a371f7; }
+  .status { font-size: 13px; padding: 4px 12px; border-radius: 12px; }
+  .status.online { background: #0d3320; color: #3fb950; }
+  .status.offline { background: #3d1f1f; color: #f85149; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+  .card h2 { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px; }
+  .metric { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .metric.positive { color: #3fb950; }
+  .metric.negative { color: #f85149; }
+  .metric.neutral { color: #c9d1d9; }
+  .sub { font-size: 13px; color: #8b949e; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; border-bottom: 1px solid #30363d; }
+  td { padding: 10px 12px; border-bottom: 1px solid #21262d; font-size: 14px; }
+  tr:hover { background: #1c2128; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+  .tag.buy { background: #0d3320; color: #3fb950; }
+  .tag.sell { background: #3d1f1f; color: #f85149; }
+  .refresh-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .refresh-btn:hover { background: #30363d; }
+  .empty { color: #484f58; text-align: center; padding: 30px; font-size: 14px; }
+  .pair-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .pair-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .pair-name { font-size: 18px; font-weight: 700; color: #a371f7; }
+  .pair-price { font-size: 14px; color: #c9d1d9; }
+  .pair-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .pair-stat { text-align: center; }
+  .pair-stat .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+  .pair-stat .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .rebate { color: #3fb950; }
+  .network-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #1f2937; color: #a371f7; margin-left: 8px; }
+  .tabs { display: flex; gap: 0; margin-bottom: 0; background: #161b22; border-bottom: 1px solid #30363d; padding: 0 24px; }
+  .tab { padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: #8b949e; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .tab:hover { color: #c9d1d9; }
+  .tab.active { color: #a371f7; border-bottom-color: #a371f7; }
+  .tab .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .tab .dot.live { background: #3fb950; }
+  .tab .dot.off { background: #484f58; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;align-items:center;">
+    <h1>Hyperliquid Market Maker</h1>
+    <span class="network-badge" id="network">--</span>
+  </div>
+  <div style="display:flex;gap:12px;align-items:center;">
+    <span style="font-size:12px;color:#8b949e;" id="last-update">--</span>
+    <button class="refresh-btn" onclick="refresh()">Refresh</button>
+    <span class="status offline" id="bot-status">Offline</span>
+  </div>
+</div>
+<div class="tabs">
+  <div class="tab active" data-bot="all" onclick="switchTab('all')"><span class="dot off" id="dot-all"></span>ALL</div>
+  <div class="tab" data-bot="sol" onclick="switchTab('sol')"><span class="dot off" id="dot-sol"></span>SOL</div>
+  <div class="tab" data-bot="btc" onclick="switchTab('btc')"><span class="dot off" id="dot-btc"></span>BTC</div>
+  <div class="tab" data-bot="eth" onclick="switchTab('eth')"><span class="dot off" id="dot-eth"></span>ETH</div>
+</div>
+
+<div class="container">
+  <div class="grid">
+    <div class="card">
+      <h2>Portfolio Value</h2>
+      <div class="metric neutral" id="portfolio-value">--</div>
+      <div class="sub" id="portfolio-start">--</div>
+    </div>
+    <div class="card">
+      <h2>Portfolio PnL</h2>
+      <div class="metric neutral" id="portfolio-pnl">--</div>
+      <div class="sub" id="pnl-fees">--</div>
+    </div>
+    <div class="card">
+      <h2>Total Fills</h2>
+      <div class="metric neutral" id="total-fills">--</div>
+      <div class="sub" id="fills-sub">--</div>
+    </div>
+    <div class="card">
+      <h2>Maker Rebates</h2>
+      <div class="metric rebate" id="rebates">--</div>
+      <div class="sub" id="rebate-sub">Earned from providing liquidity</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(340px, 1fr));gap:16px;margin-bottom:24px;" id="pairs-grid"></div>
+
+  <div class="card" style="margin-bottom:24px;">
+    <h2>Active Orders</h2>
+    <div id="orders-card"><div class="empty">Waiting for data...</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Recent Fills</h2>
+    <div id="fills-card"><div class="empty">Waiting for data...</div></div>
+  </div>
+</div>
+
+<script>
+function fmt(n, d=2) { return n == null || isNaN(n) ? '--' : Number(n).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d}); }
+function usd(n) { return n == null ? '--' : '$' + fmt(n); }
+function pnlClass(n) { return n > 0 ? 'positive' : n < 0 ? 'negative' : 'neutral'; }
+
+let activeTab = location.hash.replace('#','') || 'all';
+if (!['all','sol','btc','eth'].includes(activeTab)) activeTab = 'all';
+const STATUS_FILES = { all: '/status/all.json', sol: '/status/sol.json', btc: '/status/btc.json', eth: '/status/eth.json' };
+
+function switchTab(tab) {
+  activeTab = tab;
+  location.hash = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[data-bot="${tab}"]`).classList.add('active');
+  refresh();
+}
+
+// Set correct tab on load
+document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+document.querySelector(`.tab[data-bot="${activeTab}"]`).classList.add('active');
+
+// Merge multiple bot status files into one combined view
+function mergeStatuses(statuses) {
+  const merged = { running: false, portfolio_value: 0, portfolio_pnl: 0, initial_portfolio_value: 0,
+    total_trade_count: 0, total_fees: 0, total_rebates: 0, pairs: [], pair_status: {},
+    order_size_usd: 0, active_orders: [], recent_fills: [], prices: {}, updated_at: 0, network: 'mainnet' };
+  let anyRunning = false;
+  let gotAccount = false;
+  for (const d of statuses) {
+    if (!d) continue;
+    if (d.running) anyRunning = true;
+    // Portfolio value: same wallet, take once. Bot PnL: sum per-bot trading PnL.
+    if (!gotAccount && d.portfolio_value) {
+      merged.portfolio_value = d.portfolio_value;
+      merged.initial_portfolio_value = d.initial_portfolio_value || 0;
+      gotAccount = true;
+    }
+    merged.bot_realized_pnl = (merged.bot_realized_pnl || 0) + (d.bot_realized_pnl || 0);
+    merged.bot_net_pnl = (merged.bot_net_pnl || 0) + (d.bot_net_pnl || 0);
+    // These are per-bot, so sum them
+    merged.total_trade_count += d.total_trade_count || 0;
+    merged.total_fees += d.total_fees || 0;
+    merged.total_rebates += d.total_rebates || 0;
+    merged.pairs = merged.pairs.concat(d.pairs || []);
+    Object.assign(merged.pair_status, d.pair_status || {});
+    merged.active_orders = merged.active_orders.concat(d.active_orders || []);
+    merged.recent_fills = merged.recent_fills.concat(d.recent_fills || []);
+    Object.assign(merged.prices, d.prices || {});
+    merged.updated_at = Math.max(merged.updated_at, d.updated_at || 0);
+    merged.network = d.network || merged.network;
+  }
+  merged.running = anyRunning;
+  merged.recent_fills.sort((a,b) => (b.time||0) - (a.time||0));
+  merged.recent_fills = merged.recent_fills.slice(0, 20);
+  return merged;
+}
+
+async function refresh() {
+  // Update tab dots
+  for (const bot of ['sol','btc','eth']) {
+    try {
+      const r = await fetch(STATUS_FILES[bot] + '?t=' + Date.now());
+      if (r.ok) {
+        const s = await r.json();
+        const age = (Date.now()/1000) - (s.updated_at || 0);
+        const dot = document.getElementById('dot-' + bot);
+        dot.className = 'dot ' + (s.running && age < 120 ? 'live' : 'off');
+      }
+    } catch(e) {}
+  }
+
+  try {
+    let d;
+    if (activeTab === 'all') {
+      const results = await Promise.all(['sol','btc','eth'].map(async b => {
+        try { const r = await fetch(STATUS_FILES[b] + '?t=' + Date.now()); return r.ok ? await r.json() : null; }
+        catch(e) { return null; }
+      }));
+      d = mergeStatuses(results);
+      document.getElementById('dot-all').className = 'dot ' + (d.running ? 'live' : 'off');
+    } else {
+      const res = await fetch(STATUS_FILES[activeTab] + '?t=' + Date.now());
+      if (!res.ok) throw new Error('No status file');
+      d = await res.json();
+    }
+
+    const age = (Date.now()/1000) - (d.updated_at || 0);
+    const alive = d.running && age < 120;
+    const el = document.getElementById('bot-status');
+    el.textContent = alive ? 'Running' : 'Stopped';
+    el.className = 'status ' + (alive ? 'online' : 'offline');
+    document.getElementById('network').textContent = (d.network || 'unknown').toUpperCase();
+
+    document.getElementById('portfolio-value').textContent = usd(d.portfolio_value);
+    document.getElementById('portfolio-start').textContent = d.initial_portfolio_value ? 'Started at ' + usd(d.initial_portfolio_value) : '--';
+
+    // Show bot's actual trading PnL (realized from fills), not account value change
+    const botPnl = d.bot_net_pnl != null ? d.bot_net_pnl : (d.portfolio_pnl || 0);
+    const pnlEl = document.getElementById('portfolio-pnl');
+    pnlEl.textContent = (botPnl >= 0 ? '+' : '') + usd(botPnl);
+    pnlEl.className = 'metric ' + pnlClass(botPnl);
+
+    const totalFees = d.total_fees || 0;
+    const realized = d.bot_realized_pnl || 0;
+    const feeLabel = `Realized: ${usd(realized)} | Fees: ${usd(totalFees)}`;
+    document.getElementById('pnl-fees').textContent = feeLabel;
+
+    document.getElementById('total-fills').textContent = d.total_trade_count || 0;
+    document.getElementById('fills-sub').textContent = `${(d.pairs||[]).length} pairs active`;
+
+    const rebates = d.total_rebates || 0;
+    document.getElementById('rebates').textContent = '+' + usd(rebates);
+
+    // Per-pair cards
+    const pg = document.getElementById('pairs-grid');
+    if (d.pair_status) {
+      let html = '';
+      for (const [pair, ps] of Object.entries(d.pair_status)) {
+        const price = d.prices && d.prices[pair];
+        const mid = price ? price.mid : 0;
+        const upnl = ps.unrealized_pnl || 0;
+        html += `<div class="pair-card">
+          <div class="pair-header">
+            <span class="pair-name">${pair}</span>
+            <span class="pair-price">${mid ? '$'+fmt(mid, mid>1000?1:2) : '--'}</span>
+          </div>
+          <div class="pair-stats">
+            <div class="pair-stat">
+              <div class="label">Trades</div>
+              <div class="value">${ps.trade_count}</div>
+            </div>
+            <div class="pair-stat">
+              <div class="label">Position</div>
+              <div class="value">${fmt(ps.holding, 4)}</div>
+            </div>
+            <div class="pair-stat">
+              <div class="label">uPnL</div>
+              <div class="value ${pnlClass(upnl)}">${usd(upnl)}</div>
+            </div>
+            <div class="pair-stat">
+              <div class="label">Volume</div>
+              <div class="value">${usd(ps.volume_traded)}</div>
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:#8b949e;">
+            Fees: $${fmt(ps.fees_paid, 4)} ${ps.fees_paid < 0 ? '(rebate!)' : ''}
+            ${ps.entry_price ? ' | Entry: $'+fmt(ps.entry_price, 2) : ''}
+          </div>
+        </div>`;
+      }
+      pg.innerHTML = html;
+    }
+
+    // Orders
+    const oc = document.getElementById('orders-card');
+    if (d.active_orders && d.active_orders.length > 0) {
+      let html = '<table><tr><th>Pair</th><th>Side</th><th>Price</th><th>Size</th><th>ID</th></tr>';
+      for (const o of d.active_orders) {
+        html += `<tr>
+          <td>${o.pair}</td>
+          <td><span class="tag ${o.side}">${o.side.toUpperCase()}</span></td>
+          <td>${usd(o.price)}</td>
+          <td>${fmt(o.volume, 4)}</td>
+          <td style="font-size:12px;color:#8b949e">${(o.id||'').substring(0,12)}</td>
+        </tr>`;
+      }
+      oc.innerHTML = html + '</table>';
+    } else {
+      oc.innerHTML = '<div class="empty">No active orders</div>';
+    }
+
+    // Fills
+    const fc = document.getElementById('fills-card');
+    if (d.recent_fills && d.recent_fills.length > 0) {
+      let html = '<table><tr><th>Time</th><th>Pair</th><th>Side</th><th>Price</th><th>Size</th><th>Fee</th><th>Net</th></tr>';
+      for (const f of [...d.recent_fills].reverse()) {
+        const t = new Date(f.time * 1000).toLocaleTimeString();
+        const feeStr = f.fee < 0 ? `<span class="rebate">+$${fmt(-f.fee, 4)}</span>` : `$${fmt(f.fee, 4)}`;
+        const net = (f.closed_pnl || 0) - (f.fee || 0);
+        html += `<tr>
+          <td>${t}</td>
+          <td>${f.pair}</td>
+          <td><span class="tag ${f.side}">${f.side.toUpperCase()}</span></td>
+          <td>${usd(f.price)}</td>
+          <td>${fmt(f.volume, 4)}</td>
+          <td>${feeStr}</td>
+          <td class="${pnlClass(net)}">${net >= 0 ? '+' : ''}$${fmt(net, 4)}</td>
+        </tr>`;
+      }
+      fc.innerHTML = html + '</table>';
+    } else {
+      fc.innerHTML = '<div class="empty">No fills yet</div>';
+    }
+
+    document.getElementById('last-update').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('bot-status').textContent = 'Offline';
+    document.getElementById('bot-status').className = 'status offline';
+    document.getElementById('last-update').textContent = 'Error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
