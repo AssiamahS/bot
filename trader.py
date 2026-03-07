@@ -47,6 +47,9 @@ PAIRS = config.get("pairs", ["SOL-PERP", "BTC-PERP", "ETH-PERP"])
 ORDER_SIZE_USD = config.get("order_size_usd", 10.0)
 REFRESH_SECS = config.get("refresh_secs", 15)
 MIN_SPREAD_BPS = config.get("min_spread_bps", 5)  # 5 bps = 0.05%
+PROFITABILITY_MODE = config.get("profitability_mode", "strict")  # "strict" or "aggressive"
+SAFETY_BPS_STRICT = config.get("safety_bps_strict", 1.5)
+SAFETY_BPS_AGGRESSIVE = config.get("safety_bps_aggressive", 0.5)
 
 # Hyperliquid asset indices (mainnet)
 # These map coin names to their index on Hyperliquid
@@ -104,6 +107,12 @@ consecutive_side = {"coin": "", "side": "", "count": 0, "first_time": 0}  # adve
 adverse_pause_until = {}  # coin -> timestamp, pause vulnerable side after consecutive fills
 strategy_pause_until = 0  # global pause when avg trip net is negative
 adverse_size_mult = {}  # coin -> size multiplier after adverse detection
+# Gating counters
+quote_attempts = 0
+quotes_skipped_profitability = 0
+quotes_placed = 0
+# Inventory tracking for mean/variance
+inventory_samples = []  # list of inventory_usd values over time
 STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
@@ -700,6 +709,13 @@ def write_status():
         "turnover_per_hr": round((sum(f["cost"] for f in all_fills) / pv) / max((time.time() - start_time) / 3600, 0.01), 1) if pv > 0 else 0,
         "avg_edge_bps": round(sum(fill_edges) / len(fill_edges), 1) if fill_edges else 0,
         "positive_edge_pct": round(sum(1 for e in fill_edges if e > 0) / len(fill_edges) * 100, 0) if fill_edges else 0,
+        "profitability_mode": PROFITABILITY_MODE,
+        "quote_attempts": quote_attempts,
+        "quotes_skipped_profitability": quotes_skipped_profitability,
+        "quotes_placed": quotes_placed,
+        "gate_skip_pct": round(quotes_skipped_profitability / max(quote_attempts, 1) * 100, 1),
+        "inventory_mean": round(sum(inventory_samples) / max(len(inventory_samples), 1), 2),
+        "inventory_variance": round(sum((x - sum(inventory_samples) / max(len(inventory_samples), 1))**2 for x in inventory_samples) / max(len(inventory_samples), 1), 2) if inventory_samples else 0,
         "updated_at": time.time(),
     }
     try:
@@ -731,7 +747,7 @@ def run_cycle(info, exchange, address):
     Inventory limits control which sides are allowed.
     Only refreshes orders when price drifts >STALE_BPS from our quotes.
     """
-    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until
+    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
@@ -929,41 +945,41 @@ def run_cycle(info, exchange, address):
             live_quotes.pop(coin, None)
             continue
 
-        # --- PROFITABILITY-GATED QUOTING ---
-        # Only quote when expected net per trip is positive
+        # --- PROFITABILITY-GATED QUOTING (A/B mode) ---
+        quote_attempts += 1
         spread_ticks = round(mkt_spread / tick) if tick > 0 else 1
-        required_bps = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # 4.5 bps
 
-        if spread_ticks >= 3:
-            # Wide market: step inside, capture spread
-            buy_price = round(best_bid + tick, p_dec)
-            sell_price = round(best_ask - tick, p_dec)
-            buy_reason = "step inside"
-            sell_reason = "step inside"
-            if spread_ticks >= 6:
-                buy_price = round(best_bid + 2 * tick, p_dec)
-                sell_price = round(best_ask - 2 * tick, p_dec)
-                buy_reason = "step inside x2"
-                sell_reason = "step inside x2"
+        # Mode-dependent required spread
+        safety_bps = SAFETY_BPS_STRICT if PROFITABILITY_MODE == "strict" else SAFETY_BPS_AGGRESSIVE
+        required_bps = 2 * MAKER_FEE_BPS + safety_bps
+        required_ticks = round((mid * required_bps / 10000) / tick) if tick > 0 else 999
+        market_ticks = spread_ticks
+
+        # Track inventory for mean/variance
+        inventory_samples.append(inventory_usd)
+        if len(inventory_samples) > 1000:
+            inventory_samples.pop(0)
+
+        if spread_ticks >= required_ticks:
+            # Spread wide enough: step inside for queue priority
+            step = 1
+            if spread_ticks >= required_ticks + 3:
+                step = 2
+            buy_price = round(best_bid + step * tick, p_dec)
+            sell_price = round(best_ask - step * tick, p_dec)
+            buy_reason = f"step inside x{step}"
+            sell_reason = f"step inside x{step}"
         else:
-            # Tight market: check if spread covers fees
-            expected_spread_bps = mkt_spread_bps
-            if expected_spread_bps < required_bps:
-                # NOT PROFITABLE — cancel existing orders and skip
-                if coin_orders:
-                    for o in coin_orders:
-                        try: exchange.cancel(coin, o["oid"])
-                        except: pass
-                    print(f"  SKIP: spread {expected_spread_bps:.1f}bps < required {required_bps:.1f}bps — not profitable")
-                    live_quotes.pop(coin, None)
-                else:
-                    print(f"  WAIT: spread {expected_spread_bps:.1f}bps < required {required_bps:.1f}bps")
-                continue
-            # Tight but profitable: join queue
-            buy_price = round(best_bid, p_dec)
-            sell_price = round(best_ask, p_dec)
-            buy_reason = "join (profitable)"
-            sell_reason = "join (profitable)"
+            # Spread too tight for profitability — gate it
+            expected_net_tight = mkt_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
+            if coin_orders:
+                for o in coin_orders:
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+            quotes_skipped_profitability += 1
+            print(f"  GATE [{PROFITABILITY_MODE}]: mkt={market_ticks}t req={required_ticks}t | {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps | expNet=${expected_net_tight:.4f}")
+            live_quotes.pop(coin, None)
+            continue
 
         # Apply inventory skew
         buy_price = round(buy_price - skew_px, p_dec)
@@ -981,7 +997,7 @@ def run_cycle(info, exchange, address):
                 sell_price = flow_ceil
                 sell_reason += f" +flow{flow_shift_applied:+.0f}bp"
 
-        # Safety: never cross the spread (would become taker)
+        # Safety: never cross the spread
         if buy_price >= best_ask:
             buy_price = round(best_ask - tick, p_dec)
         if sell_price <= best_bid:
@@ -989,19 +1005,19 @@ def run_cycle(info, exchange, address):
         if sell_price <= buy_price:
             sell_price = round(buy_price + tick, p_dec)
 
-        # FINAL profitability check on our actual quotes
+        # FINAL profitability check on actual quotes after all adjustments
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
         if expected_net <= 0:
-            # Our quotes after skew/flow aren't profitable — cancel and skip
             if coin_orders:
                 for o in coin_orders:
                     try: exchange.cancel(coin, o["oid"])
                     except: pass
-                print(f"  SKIP: expected net ${expected_net:.4f} <= 0 after adjustments")
-                live_quotes.pop(coin, None)
-            else:
-                print(f"  WAIT: expected net ${expected_net:.4f} <= 0")
+            quotes_skipped_profitability += 1
+            print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 after skew/flow")
+            live_quotes.pop(coin, None)
             continue
+
+        quotes_placed += 1
 
         # Adverse selection: apply size reduction if triggered
         if coin in adverse_size_mult:
@@ -1152,8 +1168,13 @@ def run_cycle(info, exchange, address):
         avg_edge = sum(fill_edges) / len(fill_edges)
         pos_edges = sum(1 for e in fill_edges if e > 0)
         edge_stats = f" | Edge: {avg_edge:+.1f}bps ({pos_edges}/{len(fill_edges)} pos)"
+    # Inventory mean/variance
+    inv_mean = sum(inventory_samples) / len(inventory_samples) if inventory_samples else 0
+    inv_var = sum((x - inv_mean)**2 for x in inventory_samples) / len(inventory_samples) if len(inventory_samples) > 1 else 0
+    gate_pct = quotes_skipped_profitability / quote_attempts * 100 if quote_attempts > 0 else 0
     print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips}{trip_stats} | {elapsed/60:.1f}m")
     print(f"  Vol: ${total_vol:.0f} | Turnover: {turnover:.1f}x ({turnover_hr:.1f}x/hr){edge_stats}")
+    print(f"  Gate [{PROFITABILITY_MODE}]: {quotes_placed}/{quote_attempts} placed ({gate_pct:.0f}% skipped) | InvMean: ${inv_mean:.1f} InvVar: {inv_var:.0f}")
     print(f"{'='*55}")
     write_status()
 
@@ -1163,7 +1184,9 @@ def main():
     print("  Hyperliquid Market Maker (Event-Driven)")
     print(f"  Pairs: {PAIRS}")
     print(f"  Size: ${ORDER_SIZE_USD}/side | Min quote interval: {MIN_QUOTE_INTERVAL}s")
-    print(f"  Min spread: {MIN_SPREAD_BPS} bps | Maker rebate: ~0.2 bps")
+    safety = SAFETY_BPS_STRICT if PROFITABILITY_MODE == "strict" else SAFETY_BPS_AGGRESSIVE
+    req = 2 * MAKER_FEE_BPS + safety
+    print(f"  Mode: {PROFITABILITY_MODE} | Required: {req:.1f}bps | Maker fee: {MAKER_FEE_BPS}bps")
     print("=" * 55)
 
     info, exchange, address = setup_exchange()
