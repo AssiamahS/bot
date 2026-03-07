@@ -98,8 +98,9 @@ round_trips = 0  # completed buy+sell cycles
 STALE_BPS = 8  # refresh orders if price moved >8bps from our quote (stay near front)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.0  # minimum profit per round trip after fees
-# Minimum spread we need: 2 * maker_fee + profit margin
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 4.0 bps
+QUOTE_LEVELS = 3  # number of price levels per side
+LEVEL_SPACING_TICKS = 3  # ticks between each level
 
 # Queue quality thresholds
 CROWDED_SIZE = 30  # SOL units at top level = crowded queue
@@ -669,8 +670,11 @@ def run_cycle(info, exchange, address):
         spread_bps = MIN_SPREAD_BPS * vol_multiplier
         target_spread = mid * spread_bps / 10000
 
-        # Size calculation
-        size = round(ORDER_SIZE_USD / mid, s_dec)
+        # Size calculation — split across levels, respect $10 minimum per order
+        max_levels = max(1, int(ORDER_SIZE_USD / 10.5))  # each level needs >$10
+        num_levels = min(QUOTE_LEVELS, max_levels)
+        level_size_usd = ORDER_SIZE_USD / num_levels
+        size = round(level_size_usd / mid, s_dec)
         if size * mid < 10.0:
             size = round(10.5 / mid, s_dec)
 
@@ -836,74 +840,82 @@ def run_cycle(info, exchange, address):
         if sell_price <= buy_price:
             sell_price = round(buy_price + min_capture_ticks * tick, p_dec)
 
-        # Check existing orders
-        existing_buy_px = None
-        existing_buy_oid = None
+        # Build desired price levels
+        spacing = LEVEL_SPACING_TICKS * tick
+        buy_levels = [round(buy_price - i * spacing, p_dec) for i in range(num_levels)]
+        sell_levels = [round(sell_price + i * spacing, p_dec) for i in range(num_levels)]
+
+        # Collect existing orders by side
+        existing_buys = {}  # price -> oid
+        existing_sells = {}
         for o in coin_orders:
+            px = float(o.get("limitPx", 0))
+            oid = o.get("oid")
             if o.get("side") == "B":
-                existing_buy_px = float(o.get("limitPx", 0))
-                existing_buy_oid = o.get("oid")
-                break
+                existing_buys[round(px, p_dec)] = oid
+            elif o.get("side") == "A":
+                existing_sells[round(px, p_dec)] = oid
 
-        existing_sell_px = None
-        existing_sell_oid = None
-        for o in coin_orders:
-            if o.get("side") == "A":
-                existing_sell_px = float(o.get("limitPx", 0))
-                existing_sell_oid = o.get("oid")
-                break
-
-        # --- BUY SIDE ---
+        # --- BUY LEVELS ---
         if allow_buy:
-            if existing_buy_px is not None:
-                drift_bps = abs(existing_buy_px - buy_price) / mid * 10000
-                if drift_bps > STALE_BPS:
-                    try: exchange.cancel(coin, existing_buy_oid)
-                    except: pass
-                    print(f"  Refresh BUY: ${existing_buy_px:.{p_dec}f} -> ${buy_price:.{p_dec}f} ({buy_reason}, {drift_bps:.0f}bps drift)")
-                    oid = place_order(exchange, coin, True, size, buy_price)
-                    if oid:
-                        quotes["buy_oid"] = oid
-                        quotes["buy_price"] = buy_price
-                else:
-                    print(f"  BUY resting @ ${existing_buy_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
-            else:
-                print(f"  Place BUY @ ${buy_price:.{p_dec}f} ({buy_reason})")
-                oid = place_order(exchange, coin, True, size, buy_price)
-                if oid:
-                    quotes["buy_oid"] = oid
-                    quotes["buy_price"] = buy_price
-        else:
-            if existing_buy_oid:
-                print(f"  Cancel BUY (inventory ${inventory_usd:.0f} >= ${MAX_INVENTORY_USD})")
-                try: exchange.cancel(coin, existing_buy_oid)
-                except: pass
+            # Find closest existing buy to our top level for drift check
+            top_buy_drift = 0
+            if existing_buys:
+                closest_buy = min(existing_buys.keys(), key=lambda p: abs(p - buy_levels[0]))
+                top_buy_drift = abs(closest_buy - buy_levels[0]) / mid * 10000
 
-        # --- SELL SIDE ---
-        if allow_sell:
-            if existing_sell_px is not None:
-                drift_bps = abs(existing_sell_px - sell_price) / mid * 10000
-                if drift_bps > STALE_BPS:
-                    try: exchange.cancel(coin, existing_sell_oid)
+            if top_buy_drift > STALE_BPS or len(existing_buys) != num_levels:
+                # Cancel all existing buys and re-place
+                for oid in existing_buys.values():
+                    try: exchange.cancel(coin, oid)
                     except: pass
-                    print(f"  Refresh SELL: ${existing_sell_px:.{p_dec}f} -> ${sell_price:.{p_dec}f} ({sell_reason}, {drift_bps:.0f}bps drift)")
-                    oid = place_order(exchange, coin, False, size, sell_price)
+                placed = []
+                for lvl_px in buy_levels:
+                    oid = place_order(exchange, coin, True, size, lvl_px)
                     if oid:
-                        quotes["sell_oid"] = oid
-                        quotes["sell_price"] = sell_price
-                else:
-                    print(f"  SELL resting @ ${existing_sell_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
+                        placed.append(lvl_px)
+                prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
+                print(f"  BUY x{len(placed)}: {prices_str} ({buy_reason})")
+                quotes["buy_levels"] = buy_levels
             else:
-                print(f"  Place SELL @ ${sell_price:.{p_dec}f} ({sell_reason})")
-                oid = place_order(exchange, coin, False, size, sell_price)
-                if oid:
-                    quotes["sell_oid"] = oid
-                    quotes["sell_price"] = sell_price
+                prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_buys.keys(), reverse=True))
+                print(f"  BUY x{len(existing_buys)} resting: {prices_str} ({top_buy_drift:.0f}bps drift, ok)")
         else:
-            if existing_sell_oid:
-                print(f"  Cancel SELL (inventory ${inventory_usd:.0f} <= -${MAX_INVENTORY_USD})")
-                try: exchange.cancel(coin, existing_sell_oid)
-                except: pass
+            # Over inventory limit, cancel all buys
+            if existing_buys:
+                print(f"  Cancel {len(existing_buys)} BUYs (inventory ${inventory_usd:.0f} >= ${MAX_INVENTORY_USD})")
+                for oid in existing_buys.values():
+                    try: exchange.cancel(coin, oid)
+                    except: pass
+
+        # --- SELL LEVELS ---
+        if allow_sell:
+            top_sell_drift = 0
+            if existing_sells:
+                closest_sell = min(existing_sells.keys(), key=lambda p: abs(p - sell_levels[0]))
+                top_sell_drift = abs(closest_sell - sell_levels[0]) / mid * 10000
+
+            if top_sell_drift > STALE_BPS or len(existing_sells) != num_levels:
+                for oid in existing_sells.values():
+                    try: exchange.cancel(coin, oid)
+                    except: pass
+                placed = []
+                for lvl_px in sell_levels:
+                    oid = place_order(exchange, coin, False, size, lvl_px)
+                    if oid:
+                        placed.append(lvl_px)
+                prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
+                print(f"  SELL x{len(placed)}: {prices_str} ({sell_reason})")
+                quotes["sell_levels"] = sell_levels
+            else:
+                prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_sells.keys()))
+                print(f"  SELL x{len(existing_sells)} resting: {prices_str} ({top_sell_drift:.0f}bps drift, ok)")
+        else:
+            if existing_sells:
+                print(f"  Cancel {len(existing_sells)} SELLs (inventory ${inventory_usd:.0f} <= -${MAX_INVENTORY_USD})")
+                for oid in existing_sells.values():
+                    try: exchange.cancel(coin, oid)
+                    except: pass
 
         # Print position status
         if pos_size != 0:
