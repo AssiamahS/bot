@@ -517,8 +517,8 @@ def check_fills(info, address):
                 closed_pnl = float(f.get("closedPnl", 0))
 
                 # Calculate fill edge vs mid price
-                ws_book = ws_books.get(coin, {})
-                fill_mid = ws_book.get("mid", price)
+                fill_book = get_ws_book(coin)
+                fill_mid = fill_book.get("mid", price) if fill_book else price
                 if side == "B":
                     edge = fill_mid - price  # positive = bought below mid (good)
                 else:
@@ -733,10 +733,12 @@ def run_cycle(info, exchange, address):
         spread_bps = MIN_SPREAD_BPS * vol_multiplier
         target_spread = mid * spread_bps / 10000
 
-        # Size calculation — split across levels, respect $10 minimum per order
-        max_levels = max(1, int(ORDER_SIZE_USD / 10.5))  # each level needs >$10
+        # Dynamic size: use 15% of portfolio per side, floor at ORDER_SIZE_USD
+        dynamic_size_usd = max(ORDER_SIZE_USD, account_value * 0.15) if account_value > 0 else ORDER_SIZE_USD
+        # Split across levels, respect $10 minimum per order
+        max_levels = max(1, int(dynamic_size_usd / 10.5))  # each level needs >$10
         num_levels = min(QUOTE_LEVELS, max_levels)
-        level_size_usd = ORDER_SIZE_USD / num_levels
+        level_size_usd = dynamic_size_usd / num_levels
         size = round(level_size_usd / mid, s_dec)
         if size * mid < 10.0:
             size = round(10.5 / mid, s_dec)
