@@ -67,7 +67,7 @@ SIZE_DECIMALS = {
 PRICE_DECIMALS = {
     "BTC": 0,  # $1 ticks
     "ETH": 1,  # $0.1 ticks
-    "SOL": 2,  # $0.01 ticks
+    "SOL": 3,  # $0.001 ticks (0.1 cent)
 }
 
 running = True
@@ -115,10 +115,10 @@ LEVEL_SPACING_TICKS = 3  # ticks between each level
 CROWDED_SIZE = 30  # SOL units at top level = crowded queue
 THIN_SIZE = 10     # SOL units at top level = thin (good to join)
 TIGHT_SPREAD_BPS = 6  # below this, spread too tight to compete
-TICK_SIZE = {  # minimum price increment per asset
+TICK_SIZE = {  # minimum price increment per asset (from exchange)
     "BTC": 1.0,
     "ETH": 0.1,
-    "SOL": 0.01,
+    "SOL": 0.001,  # SOL tick is 0.1 cent, not 1 cent
 }
 
 # WebSocket live book data (updated by WS callbacks)
@@ -809,7 +809,8 @@ def run_cycle(info, exchange, address):
         flow_imb, buy_vol, sell_vol = get_flow_signal(coin)
         flow_total = buy_vol + sell_vol
 
-        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Sprd: {mkt_spread_bps:.1f}bps | Vol: {vol_bps:.1f}bps | Bid:{bid_top_size:.1f} Ask:{ask_top_size:.1f}", end="")
+        spread_ticks_display = round(mkt_spread / tick) if tick > 0 else 0
+        print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Sprd: {mkt_spread_bps:.1f}bps ({spread_ticks_display}t) | Vol: {vol_bps:.1f}bps | Bid:{bid_top_size:.1f} Ask:{ask_top_size:.1f}", end="")
         if abs(imbalance) > 0.1:
             print(f" | OB: {imbalance:+.2f}", end="")
         if flow_total > 0:
