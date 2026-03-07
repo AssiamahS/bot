@@ -100,6 +100,7 @@ round_trips = 0  # completed buy+sell cycles
 trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
 fill_edges = []  # edge in bps per fill, for realized spread tracking
+consecutive_side = {"coin": "", "side": "", "count": 0}  # adverse selection detector
 STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
@@ -527,10 +528,22 @@ def check_fills(info, address):
                 edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
 
                 fill_edges.append(edge_bps)
-                print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps")
+
+                # Adverse selection detector: warn on consecutive same-side fills
+                if consecutive_side["coin"] == coin and consecutive_side["side"] == side:
+                    consecutive_side["count"] += 1
+                else:
+                    consecutive_side.update({"coin": coin, "side": side, "count": 1})
+                consec = consecutive_side["count"]
+                consec_warn = f" ⚠️{consec}x{side}" if consec >= 3 else ""
+
+                print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps{consec_warn}")
                 emoji = "🟢" if side == "B" else "🔴"
                 rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
-                tg_send(f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | Edge: {edge_bps:+.1f}bps")
+                tg_msg = f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | Edge: {edge_bps:+.1f}bps"
+                if consec >= 4:
+                    tg_msg += f"\n⚠️ {consec} consecutive {side} fills — adverse selection?"
+                tg_send(tg_msg)
 
                 # --- ROUND TRIP TRACKING ---
                 leg = trip_tracker.get(coin)
@@ -831,6 +844,16 @@ def run_cycle(info, exchange, address):
             allow_sell = True
             spread_bps += 6
 
+        # Flow-based adverse selection protection
+        # If trade flow is heavily one-sided, stop quoting the side that gets picked off
+        if flow_total > 5.0:
+            if flow_imb < -0.7:
+                # Heavy selling: stop buying (you'd buy right before a drop)
+                allow_buy = False
+            elif flow_imb > 0.7:
+                # Heavy buying: stop selling (you'd sell right before a pump)
+                allow_sell = False
+
         # Defensive spread widening when inventory is heavy
         if abs(inv_ratio) > 0.50:
             spread_bps += 2
@@ -992,7 +1015,7 @@ def run_cycle(info, exchange, address):
         else:
             # Over inventory limit, cancel all buys
             if existing_buys:
-                print(f"  Cancel {len(existing_buys)} BUYs (inventory ${inventory_usd:.0f} >= ${MAX_INVENTORY_USD})")
+                print(f"  Cancel {len(existing_buys)} BUYs (no buy: inv={inv_ratio:.0%})")
                 for oid in existing_buys.values():
                     try: exchange.cancel(coin, oid)
                     except: pass
@@ -1021,7 +1044,7 @@ def run_cycle(info, exchange, address):
                 print(f"  SELL x{len(existing_sells)} resting: {prices_str} ({top_sell_drift:.0f}bps drift, ok)")
         else:
             if existing_sells:
-                print(f"  Cancel {len(existing_sells)} SELLs (inventory ${inventory_usd:.0f} <= -${MAX_INVENTORY_USD})")
+                print(f"  Cancel {len(existing_sells)} SELLs (no sell: inv={inv_ratio:.0%})")
                 for oid in existing_sells.values():
                     try: exchange.cancel(coin, oid)
                     except: pass
