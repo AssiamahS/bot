@@ -95,10 +95,14 @@ risk_cooldown_until = 0
 # Multi-quote state: track our resting orders per coin
 live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
+# Round-trip tracking: measure actual profit per completed cycle
+# A round trip = buy fill followed by sell fill (or vice versa) on same coin
+trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
+completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
 STALE_BPS = 8  # refresh orders if price moved >8bps from our quote (stay near front)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
-MIN_PROFIT_BPS = 1.0  # minimum profit per round trip after fees
-MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 4.0 bps
+MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
+MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 4.5 bps -> 4 ticks on SOL
 QUOTE_LEVELS = 3  # number of price levels per side
 LEVEL_SPACING_TICKS = 3  # ticks between each level
 
@@ -495,18 +499,17 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
 
 
 def check_fills(info, address):
-    """Check for recent fills."""
-    global total_trade_count
+    """Check for recent fills and track round-trip profitability."""
+    global total_trade_count, round_trips
     try:
         fills = info.user_fills(address)
-        # Only process fills since bot started
         new_fills = [f for f in fills if float(f.get("time", 0)) / 1000 > start_time]
         new_count = len(new_fills)
 
         if new_count > total_trade_count:
             for f in new_fills[total_trade_count:]:
                 coin = f.get("coin", "")
-                side = f.get("side", "")
+                side = f.get("side", "").upper()  # "A" (sell) or "B" (buy)
                 price = float(f.get("px", 0))
                 size = float(f.get("sz", 0))
                 fee = float(f.get("fee", 0))
@@ -514,9 +517,51 @@ def check_fills(info, address):
                 closed_pnl = float(f.get("closedPnl", 0))
 
                 print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f}")
-                emoji = "🟢" if side.lower() == "buy" else "🔴"
+                emoji = "🟢" if side == "B" else "🔴"
                 rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
-                tg_send(f"{emoji} <b>FILL</b>: {side.upper()} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | PnL: ${closed_pnl:.4f}")
+                tg_send(f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | PnL: ${closed_pnl:.4f}")
+
+                # --- ROUND TRIP TRACKING ---
+                leg = trip_tracker.get(coin)
+                if leg is None:
+                    # First leg of a new trip
+                    trip_tracker[coin] = {"side": side, "price": price, "size": size, "fee": fee, "time": time.time()}
+                elif leg["side"] != side:
+                    # Opposite side = completing a round trip!
+                    trip_size = min(leg["size"], size)
+                    total_fee = leg["fee"] + fee
+                    if leg["side"] == "B":
+                        gross = (price - leg["price"]) * trip_size  # bought low, sold high
+                    else:
+                        gross = (leg["price"] - price) * trip_size  # sold high, bought low
+                    net = gross - total_fee
+                    duration = time.time() - leg["time"]
+
+                    trip = {
+                        "coin": coin, "size": trip_size,
+                        "buy_px": leg["price"] if leg["side"] == "B" else price,
+                        "sell_px": price if leg["side"] == "B" else leg["price"],
+                        "gross": round(gross, 6), "fees": round(total_fee, 6),
+                        "net": round(net, 6), "duration": round(duration, 1),
+                    }
+                    completed_trips.append(trip)
+                    round_trips += 1
+
+                    net_sign = "+" if net >= 0 else ""
+                    print(f"  >>> TRIP #{round_trips}: {trip['buy_px']:.2f}->{trip['sell_px']:.2f} | Gross: ${gross:.4f} | Fees: ${total_fee:.4f} | Net: {net_sign}${net:.4f} | {duration:.0f}s")
+                    tg_send(f"{'✅' if net >= 0 else '❌'} <b>Trip #{round_trips}</b> {coin}\nBuy ${trip['buy_px']:.2f} -> Sell ${trip['sell_px']:.2f}\nGross: ${gross:.4f} | Fees: ${total_fee:.4f}\n<b>Net: {net_sign}${net:.4f}</b> | {duration:.0f}s")
+
+                    # Reset tracker for remaining size
+                    remaining = size - trip_size
+                    if remaining > 0.001:
+                        trip_tracker[coin] = {"side": side, "price": price, "size": remaining, "fee": fee * remaining / size, "time": time.time()}
+                    else:
+                        trip_tracker.pop(coin, None)
+                else:
+                    # Same side fill = averaging in, update tracker
+                    total_size = leg["size"] + size
+                    avg_price = (leg["price"] * leg["size"] + price * size) / total_size
+                    trip_tracker[coin] = {"side": side, "price": avg_price, "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
 
                 fill = {
                     "time": time.time(),
@@ -594,6 +639,11 @@ def write_status():
         "recent_fills": all_fills[-20:],
         "balances": last_balances,
         "prices": last_prices,
+        "round_trips": round_trips,
+        "completed_trips": completed_trips[-20:],
+        "trip_net_pnl": round(sum(t["net"] for t in completed_trips), 6),
+        "trip_winners": sum(1 for t in completed_trips if t["net"] >= 0),
+        "trip_losers": sum(1 for t in completed_trips if t["net"] < 0),
         "updated_at": time.time(),
     }
     try:
