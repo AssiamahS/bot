@@ -111,6 +111,10 @@ ws_book = {}  # coin -> {"bids": [...], "asks": [...], "ts": time}
 ws_book_lock = threading.Lock()
 ws_fills_pending = []  # new fills from WS
 ws_fills_lock = threading.Lock()
+# Event-driven: signal when book changes materially
+book_changed = threading.Event()
+last_quote_time = {}  # coin -> timestamp of last quote update
+MIN_QUOTE_INTERVAL = 0.5  # don't requote faster than 500ms (avoid spam)
 
 
 def signal_handler(sig, frame):
@@ -123,15 +127,28 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 
 def on_l2_book(data):
-    """WebSocket callback for L2 book updates."""
+    """WebSocket callback for L2 book updates. Signals main loop when book changes."""
     try:
         coin = data.get("coin", "")
         levels = data.get("levels", [])
         if len(levels) == 2:
             bids = [{"px": float(l["px"]), "sz": float(l["sz"]), "n": int(l.get("n", 0))} for l in levels[0][:5]]
             asks = [{"px": float(l["px"]), "sz": float(l["sz"]), "n": int(l.get("n", 0))} for l in levels[1][:5]]
+
+            # Check if top-of-book price actually changed
+            old_book = ws_book.get(coin)
+            price_changed = True
+            if old_book and old_book["bids"] and old_book["asks"]:
+                old_bid = old_book["bids"][0]["px"]
+                old_ask = old_book["asks"][0]["px"]
+                price_changed = (bids[0]["px"] != old_bid or asks[0]["px"] != old_ask)
+
             with ws_book_lock:
                 ws_book[coin] = {"bids": bids, "asks": asks, "ts": time.time()}
+
+            # Only wake the main loop if top-of-book price changed
+            if price_changed:
+                book_changed.set()
     except Exception:
         pass
 
@@ -779,6 +796,7 @@ def run_cycle(info, exchange, address):
             print(f"  Pos: {direction} {abs(pos_size)} @ ${entry_price:.{p_dec}f} | uPnL: ${upnl:.4f} | Inv: ${inventory_usd:.2f}")
 
         live_quotes[coin] = quotes
+        last_quote_time[coin] = time.time()
 
         # Track active orders for dashboard
         for o in current_orders.get(coin, []):
@@ -805,33 +823,55 @@ def run_cycle(info, exchange, address):
 
 def main():
     print("=" * 55)
-    print("  Hyperliquid Market Maker")
+    print("  Hyperliquid Market Maker (Event-Driven)")
     print(f"  Pairs: {PAIRS}")
-    print(f"  Size: ${ORDER_SIZE_USD}/side | Refresh: {REFRESH_SECS}s")
+    print(f"  Size: ${ORDER_SIZE_USD}/side | Min quote interval: {MIN_QUOTE_INTERVAL}s")
     print(f"  Min spread: {MIN_SPREAD_BPS} bps | Maker rebate: ~0.2 bps")
     print("=" * 55)
 
     info, exchange, address = setup_exchange()
-    tg_send(f"🚀 <b>Hyperliquid Bot Started</b>\n{'TESTNET' if USE_TESTNET else 'MAINNET'}\nPairs: {', '.join(PAIRS)}\nSize: ${ORDER_SIZE_USD}/side | Spread: {MIN_SPREAD_BPS}bps")
+    tg_send(f"🚀 <b>Hyperliquid Bot Started</b>\n{'TESTNET' if USE_TESTNET else 'MAINNET'}\nPairs: {', '.join(PAIRS)}\nSize: ${ORDER_SIZE_USD}/side | Spread: {MIN_SPREAD_BPS}bps | Event-driven")
 
     cycle_count = 0
+    last_status_tg = time.time()
+    last_account_refresh = 0
+
     while running:
         try:
+            # Wait for book change or timeout (max 5s for account refresh/status)
+            triggered = book_changed.wait(timeout=5.0)
+            if not running:
+                break
+            book_changed.clear()
+
+            # Throttle: don't requote faster than MIN_QUOTE_INTERVAL
+            now = time.time()
+            for coin in [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]:
+                last_t = last_quote_time.get(coin, 0)
+                if now - last_t < MIN_QUOTE_INTERVAL:
+                    continue  # too soon for this coin
+
+            # Refresh account state periodically (every 10s, not every cycle)
+            if now - last_account_refresh > 10:
+                get_account_state(info, address)
+                last_account_refresh = now
+
             run_cycle(info, exchange, address)
             cycle_count += 1
-            if cycle_count % 20 == 0:
+
+            # Telegram status every ~2 min
+            if now - last_status_tg > 120:
                 pv = portfolio_value()
                 pnl = pv - initial_portfolio_value if initial_portfolio_value else 0
-                tg_send(f"📊 <b>HL Status</b>\nPortfolio: ${pv:.2f}\nPnL: {'+'if pnl>=0 else ''}{pnl:.4f}\nFills: {total_trade_count} | Uptime: {(time.time()-start_time)/60:.0f}m")
+                tg_send(f"📊 <b>HL Status</b>\nPortfolio: ${pv:.2f}\nPnL: {'+'if pnl>=0 else ''}{pnl:.4f}\nFills: {total_trade_count} | Uptime: {(now-start_time)/60:.0f}m")
+                last_status_tg = now
+
         except Exception as e:
             print(f"Error: {e}")
             tg_send(f"⚠️ <b>Error</b>: {e}")
             import traceback
             traceback.print_exc()
-        for _ in range(REFRESH_SECS):
-            if not running:
-                break
-            time.sleep(1)
+            time.sleep(2)  # back off on error
 
     cancel_all_orders(exchange, info, address)
     check_fills(info, address)
