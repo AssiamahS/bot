@@ -781,8 +781,34 @@ def run_cycle(info, exchange, address):
         # === FLOW-AWARE QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
 
         inventory_usd = pos_size * mid
-        allow_buy = inventory_usd < MAX_INVENTORY_USD
-        allow_sell = inventory_usd > -MAX_INVENTORY_USD
+        inv_ratio = 0.0
+        if MAX_INVENTORY_USD > 0:
+            inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
+
+        # Side gating — reduce-only when inventory is heavy
+        REDUCE_ONLY_THRESHOLD = 0.60
+        HARD_STOP_THRESHOLD = 0.85
+
+        allow_buy = True
+        allow_sell = True
+
+        if inv_ratio >= REDUCE_ONLY_THRESHOLD:
+            allow_buy = False
+        if inv_ratio <= -REDUCE_ONLY_THRESHOLD:
+            allow_sell = False
+        if inv_ratio >= HARD_STOP_THRESHOLD:
+            allow_buy = False
+            allow_sell = True
+        if inv_ratio <= -HARD_STOP_THRESHOLD:
+            allow_buy = True
+            allow_sell = False
+
+        # Defensive spread widening when inventory is heavy
+        if abs(inv_ratio) > 0.50:
+            spread_bps += 2
+        if abs(inv_ratio) > 0.75:
+            spread_bps += 4
+        target_spread = mid * spread_bps / 10000
 
         # Shift fair value based on trade flow
         # Buyers lifting asks -> raise fair value, sellers hitting bids -> lower
@@ -803,11 +829,10 @@ def run_cycle(info, exchange, address):
             spread_bps += FLOW_WIDEN_BPS
             target_spread = fair_mid * spread_bps / 10000
 
-        # Skew quotes toward reducing inventory
-        skew = 0
-        if pos_size != 0:
-            inv_ratio = inventory_usd / MAX_INVENTORY_USD
-            skew = inv_ratio * target_spread * 0.5
+        # Stronger inventory skew: push quotes harder toward flattening
+        INVENTORY_SKEW_BPS = 12.0
+        skew_bps = inv_ratio * INVENTORY_SKEW_BPS
+        skew_px = mid * skew_bps / 10000.0
 
         quotes = live_quotes.get(coin, {})
 
@@ -848,8 +873,8 @@ def run_cycle(info, exchange, address):
             sell_reason = "join ask"
 
         # Apply inventory skew
-        buy_price = round(buy_price - skew, p_dec)
-        sell_price = round(sell_price - skew, p_dec)
+        buy_price = round(buy_price - skew_px, p_dec)
+        sell_price = round(sell_price - skew_px, p_dec)
 
         # Apply flow shift
         if flow_shift_applied != 0:
@@ -878,8 +903,8 @@ def run_cycle(info, exchange, address):
         if actual_spread_ticks < min_capture_ticks:
             # Widen symmetrically around mid to ensure profitability
             needed_half = (min_capture_ticks * tick) / 2
-            buy_price = round(fair_mid - needed_half - skew, p_dec)
-            sell_price = round(fair_mid + needed_half - skew, p_dec)
+            buy_price = round(fair_mid - needed_half - skew_px, p_dec)
+            sell_price = round(fair_mid + needed_half - skew_px, p_dec)
             buy_reason = f"widen for profit ({min_capture_ticks}t)"
             sell_reason = f"widen for profit ({min_capture_ticks}t)"
             # Re-check bounds
