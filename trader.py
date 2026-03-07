@@ -90,11 +90,11 @@ MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
 
-# Ping-pong state: track our open orders so we DON'T cancel take-profits
-# Key: coin -> {"buy_oid": ..., "sell_oid": ..., "buy_price": ..., "sell_price": ..., "size": ...}
-open_grid = {}
-last_fill_count = {}  # track fills per coin to detect new ones
+# Multi-quote state: track our resting orders per coin
+# Key: coin -> {"buy_oid": ..., "sell_oid": ..., "buy_price": ..., "sell_price": ...}
+live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
+STALE_BPS = 15  # only refresh orders if price moved >15bps from our quote
 
 
 def signal_handler(sig, frame):
@@ -456,15 +456,13 @@ def get_open_orders_by_coin(info, address):
 
 
 def run_cycle(info, exchange, address):
-    """Ping-pong trading cycle.
+    """Multi-quote market making cycle.
 
-    Instead of cancel-replace every cycle:
-    1. If no position and no orders -> place a BUY at best bid
-    2. When buy fills (we're long) -> place a SELL at buy_price + spread (take profit)
-    3. When sell fills (round trip done) -> place new BUY
-    4. Only cancel+replace if price moved too far from our orders (stale)
+    Always quotes both sides (buy + sell) simultaneously.
+    Inventory limits control which sides are allowed.
+    Only refreshes orders when price drifts >STALE_BPS from our quotes.
     """
-    global active_orders, risk_cooldown_until, open_grid, round_trips
+    global active_orders, risk_cooldown_until, live_quotes, round_trips
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
@@ -522,106 +520,138 @@ def run_cycle(info, exchange, address):
 
         # Get existing orders for this coin
         coin_orders = current_orders.get(coin, [])
-        has_buy = any(o.get("side", "") == "B" for o in coin_orders)
-        has_sell = any(o.get("side", "") == "A" for o in coin_orders)
-        grid = open_grid.get(coin, {})
-
         print(f"\n  {coin} | Mid: ${mid:.{p_dec}f} | Vol: {vol_bps:.1f}bps | Spread target: {spread_bps:.0f}bps", end="")
         if abs(imbalance) > 0.1:
             print(f" | OB: {imbalance:+.2f}", end="")
         print()
 
-        # === PING-PONG LOGIC ===
-
-        if pos_size == 0 and not has_buy and not has_sell:
-            # STATE: FLAT, NO ORDERS -> Place initial buy at best bid
-            buy_price = round(best_bid, p_dec)
-            print(f"  PING: Place BUY @ ${buy_price:.{p_dec}f} (waiting for entry)")
-            oid = place_order(exchange, coin, True, size, buy_price)
-            if oid:
-                open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
-                                   "size": size, "buy_oid": oid}
-
-        elif pos_size > 0 and not has_sell:
-            # STATE: LONG, NO SELL -> Buy filled! Place take-profit sell
-            tp_price = round(entry_price + target_spread, p_dec)
-            # Make sure TP is above best ask or at least entry + min spread
-            tp_price = round(max(tp_price, entry_price + mid * MIN_SPREAD_BPS / 10000), p_dec)
-            print(f"  PONG: Long {pos_size} @ ${entry_price:.{p_dec}f} -> SELL TP @ ${tp_price:.{p_dec}f} (+${tp_price - entry_price:.{p_dec}f})")
-            oid = place_order(exchange, coin, False, abs(pos_size), tp_price, reduce_only=True)
-            if oid:
-                open_grid[coin] = {"state": "waiting_sell", "entry": entry_price,
-                                   "tp": tp_price, "size": abs(pos_size), "sell_oid": oid}
-                # Also cancel any stale buys
-                for o in coin_orders:
-                    if o.get("side") == "B":
-                        try: exchange.cancel(coin, o["oid"])
-                        except: pass
-
-        elif pos_size < 0 and not has_buy:
-            # STATE: SHORT, NO BUY -> Sell filled! Place take-profit buy
-            tp_price = round(entry_price - target_spread, p_dec)
-            tp_price = round(min(tp_price, entry_price - mid * MIN_SPREAD_BPS / 10000), p_dec)
-            print(f"  PONG: Short {pos_size} @ ${entry_price:.{p_dec}f} -> BUY TP @ ${tp_price:.{p_dec}f} (+${entry_price - tp_price:.{p_dec}f})")
-            oid = place_order(exchange, coin, True, abs(pos_size), tp_price, reduce_only=True)
-            if oid:
-                open_grid[coin] = {"state": "waiting_buy_close", "entry": entry_price,
-                                   "tp": tp_price, "size": abs(pos_size), "buy_oid": oid}
-                for o in coin_orders:
-                    if o.get("side") == "A":
-                        try: exchange.cancel(coin, o["oid"])
-                        except: pass
-
-        elif pos_size == 0 and (has_buy or has_sell):
-            # STATE: FLAT BUT HAVE ORDERS -> A round trip just completed!
-            round_trips += 1
-            print(f"  ROUND TRIP #{round_trips} COMPLETE! Canceling stale orders and restarting.")
-            tg_send(f"✅ <b>Round Trip #{round_trips}</b> {coin}\nPlacing new entry...")
-            # Cancel leftover orders
-            for o in coin_orders:
-                try: exchange.cancel(coin, o["oid"])
-                except: pass
-            # Place fresh buy
-            buy_price = round(best_bid, p_dec)
-            oid = place_order(exchange, coin, True, size, buy_price)
-            if oid:
-                open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
-                                   "size": size, "buy_oid": oid}
-
-        else:
-            # STATE: Have position AND matching order -> waiting for TP fill
-            state = grid.get("state", "?")
+        # === STOP-LOSS CHECK ===
+        STOP_LOSS_BPS = 30  # 0.30% max loss before cutting
+        if pos_size != 0 and entry_price > 0:
             if pos_size > 0:
-                # Check if our sell is too far from current price (stale)
+                loss_bps = (entry_price - mid) / entry_price * 10000
+            else:
+                loss_bps = (mid - entry_price) / entry_price * 10000
+            if loss_bps > STOP_LOSS_BPS:
+                loss_usd = abs(pos_size) * mid * loss_bps / 10000
+                print(f"  STOP LOSS: {loss_bps:.0f}bps against us (~${loss_usd:.4f}), closing position")
+                tg_send(f"🛑 <b>STOP LOSS</b> {coin}: {loss_bps:.0f}bps loss, closing")
                 for o in coin_orders:
-                    if o.get("side") == "A":
-                        sell_px = float(o.get("limitPx", 0))
-                        distance_bps = abs(sell_px - mid) / mid * 10000
-                        # Only re-place if TP moved MORE than 50bps from mid (very stale)
-                        if distance_bps > 50:
-                            print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
-                            try: exchange.cancel(coin, o["oid"])
-                            except: pass
-                            tp_price = round(entry_price + target_spread, p_dec)
-                            tp_price = round(max(tp_price, entry_price + mid * MIN_SPREAD_BPS / 10000), p_dec)
-                            place_order(exchange, coin, False, abs(pos_size), tp_price, reduce_only=True)
-                        else:
-                            print(f"  Waiting: long {pos_size} | TP sell @ ${sell_px:.{p_dec}f} ({distance_bps:.0f}bps away)")
-                        break
-            elif pos_size < 0:
-                for o in coin_orders:
-                    if o.get("side") == "B":
-                        buy_px = float(o.get("limitPx", 0))
-                        distance_bps = abs(buy_px - mid) / mid * 10000
-                        if distance_bps > 50:
-                            print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
-                            try: exchange.cancel(coin, o["oid"])
-                            except: pass
-                            tp_price = round(entry_price - target_spread, p_dec)
-                            place_order(exchange, coin, True, abs(pos_size), tp_price, reduce_only=True)
-                        else:
-                            print(f"  Waiting: short {pos_size} | TP buy @ ${buy_px:.{p_dec}f} ({distance_bps:.0f}bps away)")
-                        break
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+                try:
+                    exchange.market_close(coin)
+                except Exception as e:
+                    print(f"  Market close error: {e}")
+                live_quotes.pop(coin, None)
+                continue
+
+        # === MULTI-QUOTE MARKET MAKING ===
+        # Always try to have both a buy and sell resting.
+        # Inventory limits control which sides are allowed.
+        # Only cancel+replace if price drifted too far from our quotes.
+
+        inventory_usd = pos_size * mid  # positive = long, negative = short
+        allow_buy = inventory_usd < MAX_INVENTORY_USD
+        allow_sell = inventory_usd > -MAX_INVENTORY_USD
+
+        # Skew quotes toward reducing inventory (asymmetric spread)
+        skew = 0
+        if pos_size != 0:
+            inv_ratio = inventory_usd / MAX_INVENTORY_USD  # -1 to +1
+            skew = inv_ratio * target_spread * 0.5  # shift mid toward reducing
+
+        # Calculate ideal quote prices
+        half_spread = target_spread / 2
+        ideal_buy = round(mid - half_spread - skew, p_dec)
+        ideal_sell = round(mid + half_spread - skew, p_dec)
+
+        # Ensure minimum tick separation
+        if ideal_sell <= ideal_buy:
+            ideal_sell = round(ideal_buy + 10 ** (-p_dec), p_dec)
+
+        quotes = live_quotes.get(coin, {})
+
+        # Check existing buy order
+        existing_buy_px = None
+        existing_buy_oid = None
+        for o in coin_orders:
+            if o.get("side") == "B":
+                existing_buy_px = float(o.get("limitPx", 0))
+                existing_buy_oid = o.get("oid")
+                break
+
+        # Check existing sell order
+        existing_sell_px = None
+        existing_sell_oid = None
+        for o in coin_orders:
+            if o.get("side") == "A":
+                existing_sell_px = float(o.get("limitPx", 0))
+                existing_sell_oid = o.get("oid")
+                break
+
+        # --- BUY SIDE ---
+        if allow_buy:
+            if existing_buy_px is not None:
+                drift_bps = abs(existing_buy_px - ideal_buy) / mid * 10000
+                if drift_bps > STALE_BPS:
+                    # Price moved too far, refresh
+                    try: exchange.cancel(coin, existing_buy_oid)
+                    except: pass
+                    print(f"  Refresh BUY: ${existing_buy_px:.{p_dec}f} -> ${ideal_buy:.{p_dec}f} ({drift_bps:.0f}bps drift)")
+                    oid = place_order(exchange, coin, True, size, ideal_buy)
+                    if oid:
+                        quotes["buy_oid"] = oid
+                        quotes["buy_price"] = ideal_buy
+                else:
+                    print(f"  BUY resting @ ${existing_buy_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
+            else:
+                # No buy order, place one
+                print(f"  Place BUY @ ${ideal_buy:.{p_dec}f}")
+                oid = place_order(exchange, coin, True, size, ideal_buy)
+                if oid:
+                    quotes["buy_oid"] = oid
+                    quotes["buy_price"] = ideal_buy
+        else:
+            # Over inventory limit, cancel buy if exists
+            if existing_buy_oid:
+                print(f"  Cancel BUY (inventory ${inventory_usd:.0f} >= ${MAX_INVENTORY_USD})")
+                try: exchange.cancel(coin, existing_buy_oid)
+                except: pass
+
+        # --- SELL SIDE ---
+        if allow_sell:
+            if existing_sell_px is not None:
+                drift_bps = abs(existing_sell_px - ideal_sell) / mid * 10000
+                if drift_bps > STALE_BPS:
+                    try: exchange.cancel(coin, existing_sell_oid)
+                    except: pass
+                    print(f"  Refresh SELL: ${existing_sell_px:.{p_dec}f} -> ${ideal_sell:.{p_dec}f} ({drift_bps:.0f}bps drift)")
+                    oid = place_order(exchange, coin, False, size, ideal_sell)
+                    if oid:
+                        quotes["sell_oid"] = oid
+                        quotes["sell_price"] = ideal_sell
+                else:
+                    print(f"  SELL resting @ ${existing_sell_px:.{p_dec}f} ({drift_bps:.0f}bps drift, ok)")
+            else:
+                print(f"  Place SELL @ ${ideal_sell:.{p_dec}f}")
+                oid = place_order(exchange, coin, False, size, ideal_sell)
+                if oid:
+                    quotes["sell_oid"] = oid
+                    quotes["sell_price"] = ideal_sell
+        else:
+            if existing_sell_oid:
+                print(f"  Cancel SELL (inventory ${inventory_usd:.0f} <= -${MAX_INVENTORY_USD})")
+                try: exchange.cancel(coin, existing_sell_oid)
+                except: pass
+
+        # Print position status
+        if pos_size != 0:
+            direction = "LONG" if pos_size > 0 else "SHORT"
+            upnl = pos.get("unrealized_pnl", 0)
+            print(f"  Pos: {direction} {abs(pos_size)} @ ${entry_price:.{p_dec}f} | uPnL: ${upnl:.4f} | Inv: ${inventory_usd:.2f}")
+
+        live_quotes[coin] = quotes
 
         # Track active orders for dashboard
         for o in current_orders.get(coin, []):

@@ -531,6 +531,30 @@ def run_cycle(info, exchange, address):
             print(f" | OB: {imbalance:+.2f}", end="")
         print()
 
+        # === STOP-LOSS CHECK ===
+        # If price moved too far against us, cut the loss and restart
+        STOP_LOSS_BPS = 30  # 0.30% max loss before cutting
+        if pos_size != 0 and entry_price > 0:
+            if pos_size > 0:
+                loss_bps = (entry_price - mid) / entry_price * 10000  # positive = losing
+            else:
+                loss_bps = (mid - entry_price) / entry_price * 10000  # positive = losing
+            if loss_bps > STOP_LOSS_BPS:
+                loss_usd = abs(pos_size) * mid * loss_bps / 10000
+                print(f"  STOP LOSS: {loss_bps:.0f}bps against us (~${loss_usd:.4f}), closing position")
+                tg_send(f"🛑 <b>STOP LOSS</b> {coin}: {loss_bps:.0f}bps loss, closing")
+                # Cancel all orders for this coin
+                for o in coin_orders:
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+                # Market close
+                try:
+                    exchange.market_close(coin)
+                except Exception as e:
+                    print(f"  Market close error: {e}")
+                open_grid.pop(coin, None)
+                continue
+
         # === PING-PONG LOGIC ===
 
         if pos_size == 0 and not has_buy and not has_sell:
