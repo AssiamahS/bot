@@ -761,61 +761,61 @@ def run_cycle(info, exchange, address):
 
         quotes = live_quotes.get(coin, {})
 
-        # --- SMART BUY PRICE ---
+        # --- QUOTE PLACEMENT LOGIC ---
+        # Goal: get queue priority by stepping inside spread when profitable.
+        # Rule: only step inside if we keep min_capture_ticks between our buy and sell.
         min_spread_ticks = round(mkt_spread / tick) if tick > 0 else 1
+        min_capture = fair_mid * MIN_CAPTURE_BPS / 10000
+        min_capture_ticks = max(2, round(min_capture / tick))
 
-        if min_spread_ticks <= 1:
-            # Spread at minimum (1 tick) — always join best bid. Stepping back = no fills.
-            buy_price = round(best_bid, p_dec)
-            buy_reason = "join bid"
-        elif min_spread_ticks >= 3 and bid_top_size < THIN_SIZE:
-            # Wide spread + thin queue = step inside for priority
+        # Room to step inside = market spread minus our minimum needed spread
+        room_ticks = min_spread_ticks - min_capture_ticks
+
+        if room_ticks >= 2:
+            # Wide spread: step inside on BOTH sides for queue priority
             buy_price = round(best_bid + tick, p_dec)
-            buy_reason = "wide+thin, step inside"
-        elif min_spread_ticks >= 3 and bid_top_size > CROWDED_SIZE:
-            # Wide spread + crowded = step inside to jump queue
-            buy_price = round(best_bid + tick, p_dec)
-            buy_reason = "wide+crowded, step inside"
+            sell_price = round(best_ask - tick, p_dec)
+            buy_reason = "step inside"
+            sell_reason = "step inside"
+        elif room_ticks == 1:
+            # Moderate spread: step inside on one side (prefer the thinner queue)
+            if bid_top_size > ask_top_size:
+                # Bid more crowded, step inside bid for priority
+                buy_price = round(best_bid + tick, p_dec)
+                sell_price = round(best_ask, p_dec)
+                buy_reason = "step inside (crowded bid)"
+                sell_reason = "join ask"
+            else:
+                buy_price = round(best_bid, p_dec)
+                sell_price = round(best_ask - tick, p_dec)
+                buy_reason = "join bid"
+                sell_reason = "step inside (crowded ask)"
         else:
-            # 2-tick spread or normal — join best bid
+            # Tight spread: join best bid/ask, widen later if needed
             buy_price = round(best_bid, p_dec)
+            sell_price = round(best_ask, p_dec)
             buy_reason = "join bid"
+            sell_reason = "join ask"
 
-        # Apply inventory skew + flow shift
+        # Apply inventory skew
         buy_price = round(buy_price - skew, p_dec)
-        # Flow-adjusted floor: don't quote below fair_mid - half_spread
+        sell_price = round(sell_price - skew, p_dec)
+
+        # Apply flow shift
         if flow_shift_applied != 0:
             half_spread = target_spread / 2
             flow_floor = round(fair_mid - half_spread, p_dec)
+            flow_ceil = round(fair_mid + half_spread, p_dec)
             if buy_price < flow_floor:
                 buy_price = flow_floor
                 buy_reason += f" +flow{flow_shift_applied:+.0f}bp"
-        # Safety: don't cross the spread
-        if buy_price >= best_ask:
-            buy_price = round(best_ask - tick, p_dec)
-
-        # --- SMART SELL PRICE ---
-        if min_spread_ticks <= 1:
-            sell_price = round(best_ask, p_dec)
-            sell_reason = "join ask"
-        elif min_spread_ticks >= 3 and ask_top_size < THIN_SIZE:
-            sell_price = round(best_ask - tick, p_dec)
-            sell_reason = "wide+thin, step inside"
-        elif min_spread_ticks >= 3 and ask_top_size > CROWDED_SIZE:
-            sell_price = round(best_ask - tick, p_dec)
-            sell_reason = "wide+crowded, step inside"
-        else:
-            sell_price = round(best_ask, p_dec)
-            sell_reason = "join ask"
-
-        sell_price = round(sell_price - skew, p_dec)
-        # Flow-adjusted ceiling: don't quote above fair_mid + half_spread
-        if flow_shift_applied != 0:
-            half_spread = target_spread / 2
-            flow_ceil = round(fair_mid + half_spread, p_dec)
             if sell_price > flow_ceil:
                 sell_price = flow_ceil
                 sell_reason += f" +flow{flow_shift_applied:+.0f}bp"
+
+        # Safety: don't cross
+        if buy_price >= best_ask:
+            buy_price = round(best_ask - tick, p_dec)
         if sell_price <= best_bid:
             sell_price = round(best_bid + tick, p_dec)
 
