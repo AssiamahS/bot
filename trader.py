@@ -99,6 +99,7 @@ round_trips = 0  # completed buy+sell cycles
 # A round trip = buy fill followed by sell fill (or vice versa) on same coin
 trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
+fill_edges = []  # edge in bps per fill, for realized spread tracking
 STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
@@ -525,6 +526,7 @@ def check_fills(info, address):
                     edge = price - fill_mid  # positive = sold above mid (good)
                 edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
 
+                fill_edges.append(edge_bps)
                 print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps")
                 emoji = "🟢" if side == "B" else "🔴"
                 rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
@@ -657,6 +659,10 @@ def write_status():
         "trip_avg_fees": round(sum(t["fees"] for t in completed_trips) / len(completed_trips), 6) if completed_trips else 0,
         "trip_avg_net": round(sum(t["net"] for t in completed_trips) / len(completed_trips), 6) if completed_trips else 0,
         "trip_fee_ratio": round(sum(t["fees"] for t in completed_trips) / max(sum(t["gross"] for t in completed_trips), 0.0001), 2) if completed_trips else 0,
+        "turnover_x": round(sum(f["cost"] for f in all_fills) / pv, 1) if pv > 0 else 0,
+        "turnover_per_hr": round((sum(f["cost"] for f in all_fills) / pv) / max((time.time() - start_time) / 3600, 0.01), 1) if pv > 0 else 0,
+        "avg_edge_bps": round(sum(fill_edges) / len(fill_edges), 1) if fill_edges else 0,
+        "positive_edge_pct": round(sum(1 for e in fill_edges if e > 0) / len(fill_edges) * 100, 0) if fill_edges else 0,
         "updated_at": time.time(),
     }
     try:
@@ -849,7 +855,13 @@ def run_cycle(info, exchange, address):
         # Widen spread during extreme one-way flow (protection)
         if abs(flow_imb) > 0.6 and flow_total > 5.0:
             spread_bps += FLOW_WIDEN_BPS
-            target_spread = fair_mid * spread_bps / 10000
+
+        # Widen spread on order book imbalance (price move likely)
+        if abs(imbalance) > 0.5:
+            obi_widen = 3 if abs(imbalance) > 0.7 else 2
+            spread_bps += obi_widen
+
+        target_spread = fair_mid * spread_bps / 10000
 
         # Stronger inventory skew: push quotes harder toward flattening
         INVENTORY_SKEW_BPS = 12.0
@@ -1064,7 +1076,18 @@ def run_cycle(info, exchange, address):
         winners = sum(1 for t in completed_trips if t["net"] >= 0)
         win_rate = winners / len(completed_trips) * 100
         trip_stats = f" | AvgNet: ${avg_net:.4f} WR: {win_rate:.0f}% FeeR: {fee_ratio:.2f}"
+    # Turnover and realized spread
+    total_vol = sum(f["cost"] for f in all_fills)
+    hours = max(elapsed / 3600, 0.01)
+    turnover = total_vol / pv if pv > 0 else 0
+    turnover_hr = turnover / hours
+    edge_stats = ""
+    if fill_edges:
+        avg_edge = sum(fill_edges) / len(fill_edges)
+        pos_edges = sum(1 for e in fill_edges if e > 0)
+        edge_stats = f" | Edge: {avg_edge:+.1f}bps ({pos_edges}/{len(fill_edges)} pos)"
     print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips}{trip_stats} | {elapsed/60:.1f}m")
+    print(f"  Vol: ${total_vol:.0f} | Turnover: {turnover:.1f}x ({turnover_hr:.1f}x/hr){edge_stats}")
     print(f"{'='*55}")
     write_status()
 
