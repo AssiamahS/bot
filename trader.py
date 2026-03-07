@@ -754,25 +754,22 @@ def run_cycle(info, exchange, address):
         quotes = live_quotes.get(coin, {})
 
         # --- SMART BUY PRICE ---
-        # Decide where to place buy based on queue quality
-        if mkt_spread_bps < TIGHT_SPREAD_BPS:
-            # Spread too tight, quote one tick below best bid (don't fight)
-            buy_price = round(best_bid - tick, p_dec)
-            buy_reason = "tight spread, step back"
-        elif bid_top_size > CROWDED_SIZE:
-            # Top level crowded, we'd be buried. Step inside if spread allows, else step back
-            if mkt_spread_bps >= 8:
-                buy_price = round(best_bid + tick, p_dec)
-                buy_reason = "crowded bid, step inside"
-            else:
-                buy_price = round(best_bid - tick, p_dec)
-                buy_reason = "crowded bid, step back"
-        elif bid_top_size < THIN_SIZE and mkt_spread_bps >= 8:
-            # Thin queue + wide spread = step inside for priority
+        min_spread_ticks = round(mkt_spread / tick) if tick > 0 else 1
+
+        if min_spread_ticks <= 1:
+            # Spread at minimum (1 tick) — always join best bid. Stepping back = no fills.
+            buy_price = round(best_bid, p_dec)
+            buy_reason = "join bid"
+        elif min_spread_ticks >= 3 and bid_top_size < THIN_SIZE:
+            # Wide spread + thin queue = step inside for priority
             buy_price = round(best_bid + tick, p_dec)
-            buy_reason = "thin queue, step inside"
+            buy_reason = "wide+thin, step inside"
+        elif min_spread_ticks >= 3 and bid_top_size > CROWDED_SIZE:
+            # Wide spread + crowded = step inside to jump queue
+            buy_price = round(best_bid + tick, p_dec)
+            buy_reason = "wide+crowded, step inside"
         else:
-            # Normal conditions, join best bid
+            # 2-tick spread or normal — join best bid
             buy_price = round(best_bid, p_dec)
             buy_reason = "join bid"
 
@@ -790,19 +787,15 @@ def run_cycle(info, exchange, address):
             buy_price = round(best_ask - tick, p_dec)
 
         # --- SMART SELL PRICE ---
-        if mkt_spread_bps < TIGHT_SPREAD_BPS:
-            sell_price = round(best_ask + tick, p_dec)
-            sell_reason = "tight spread, step back"
-        elif ask_top_size > CROWDED_SIZE:
-            if mkt_spread_bps >= 8:
-                sell_price = round(best_ask - tick, p_dec)
-                sell_reason = "crowded ask, step inside"
-            else:
-                sell_price = round(best_ask + tick, p_dec)
-                sell_reason = "crowded ask, step back"
-        elif ask_top_size < THIN_SIZE and mkt_spread_bps >= 8:
+        if min_spread_ticks <= 1:
+            sell_price = round(best_ask, p_dec)
+            sell_reason = "join ask"
+        elif min_spread_ticks >= 3 and ask_top_size < THIN_SIZE:
             sell_price = round(best_ask - tick, p_dec)
-            sell_reason = "thin queue, step inside"
+            sell_reason = "wide+thin, step inside"
+        elif min_spread_ticks >= 3 and ask_top_size > CROWDED_SIZE:
+            sell_price = round(best_ask - tick, p_dec)
+            sell_reason = "wide+crowded, step inside"
         else:
             sell_price = round(best_ask, p_dec)
             sell_reason = "join ask"
