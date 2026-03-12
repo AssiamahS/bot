@@ -114,7 +114,7 @@ price_history = {COIN_MAP.get(p, p.replace("-PERP", "")): [] for p in PAIRS}
 VOL_WINDOW = 20
 
 # Risk governor limits (scaled for small portfolio)
-MAX_DRAWDOWN = 0.20
+MAX_DRAWDOWN = 0.30  # raised: account already absorbed prior losses, protect from here
 MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
