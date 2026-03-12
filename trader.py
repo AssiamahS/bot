@@ -22,6 +22,21 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 from tg_commander import TelegramCommander
 
+def _api_call(fn, *args, **kwargs):
+    """Wrap REST API calls with retry on 429."""
+    for attempt in range(3):
+        try:
+            result = fn(*args, **kwargs)
+            return result
+        except Exception as e:
+            if '429' in str(e):
+                wait = (attempt + 1) * 2
+                print(f"  429 rate limit, backing off {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+    return None
+
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
 
@@ -444,7 +459,7 @@ def get_account_state(info, address):
     """Get account balances and positions. Checks both perps and spot."""
     global last_balances
     try:
-        state = info.user_state(address)
+        state = _api_call(info.user_state, address)
         if state:
             margin = state.get("marginSummary", {})
             perps_value = float(margin.get("accountValue", 0))
@@ -452,7 +467,7 @@ def get_account_state(info, address):
             # Also check spot balance (portfolio margin uses spot USDC as collateral)
             spot_usdc = 0
             try:
-                spot = info.spot_user_state(address)
+                spot = _api_call(info.spot_user_state, address) or {}
                 for b in spot.get("balances", []):
                     if b["coin"] == "USDC" and float(b["total"]) > 0:
                         spot_usdc = float(b["total"])
@@ -552,7 +567,7 @@ def check_fills(info, address):
     """Check for recent fills and track round-trip profitability."""
     global total_trade_count, round_trips, strategy_pause_until
     try:
-        fills = info.user_fills(address)
+        fills = _api_call(info.user_fills, address) or []
         new_fills = [f for f in fills if float(f.get("time", 0)) / 1000 > start_time]
         new_count = len(new_fills)
 
@@ -791,7 +806,7 @@ def get_open_orders_by_coin(info, address):
     """Get open orders grouped by coin."""
     result = {}
     try:
-        orders = info.open_orders(address)
+        orders = _api_call(info.open_orders, address) or []
         for o in orders:
             coin = o.get("coin", "")
             if coin not in result:
