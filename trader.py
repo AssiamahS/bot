@@ -155,6 +155,7 @@ quotes_placed = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
+SHADE_PCT = 0.05  # compress quotes 5% toward mid for faster trip completion
 STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
@@ -1251,6 +1252,11 @@ def run_cycle(info, exchange, address):
             print(f"  GATE [{PROFITABILITY_MODE}]: mkt={market_ticks}t req={required_ticks}t | {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps | expNet=${expected_net_tight:.4f}")
             live_quotes.pop(coin, None)
             continue
+
+        # Price shading: compress quotes toward mid for faster fills
+        shade_amount = (sell_price - buy_price) * SHADE_PCT
+        buy_price = round(buy_price + shade_amount, p_dec)
+        sell_price = round(sell_price - shade_amount, p_dec)
 
         # Apply inventory skew
         buy_price = round(buy_price - skew_px, p_dec)
