@@ -115,7 +115,7 @@ VOL_WINDOW = 20
 
 # Risk governor limits (scaled for small portfolio)
 MAX_DRAWDOWN = 0.20
-MAX_INVENTORY_USD = 5  # max $5 per coin, forces diversification
+MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -790,7 +790,7 @@ def get_open_orders_by_coin(info, address):
 
 
 MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
-MIN_SCORE_THRESHOLD = 1.5  # lowered: penalties are already conservative
+MIN_SCORE_THRESHOLD = 5.0  # strict: only quote high-confidence setups
 
 
 def check_weak_pair(coin):
@@ -1017,8 +1017,8 @@ def run_cycle(info, exchange, address):
         spread_bps = MIN_SPREAD_BPS * vol_multiplier
         target_spread = mid * spread_bps / 10000
 
-        # Dynamic size: use 15% of portfolio per side, floor at ORDER_SIZE_USD
-        dynamic_size_usd = max(ORDER_SIZE_USD, account_value * 0.15) if account_value > 0 else ORDER_SIZE_USD
+        # Fixed size from config — no dynamic scaling until edge is proven profitable
+        dynamic_size_usd = ORDER_SIZE_USD
         # Split across levels, respect $10 minimum per order
         max_levels = max(1, int(dynamic_size_usd / 10.5))  # each level needs >$10
         num_levels = min(QUOTE_LEVELS, max_levels)
