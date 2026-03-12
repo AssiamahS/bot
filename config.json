@@ -7,7 +7,7 @@
     "pairs": [
         "DYDX-PERP"
     ],
-    "order_size_usd": 12.0,
+    "order_size_usd": 18.0,
     "refresh_secs": 5,
     "min_spread_bps": 4.0,
     "profitability_mode": "balanced",
