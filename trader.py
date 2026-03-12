@@ -1171,7 +1171,7 @@ def run_cycle(info, exchange, address):
         target_spread = fair_mid * spread_bps / 10000
 
         # Stronger inventory skew: push quotes harder toward flattening
-        INVENTORY_SKEW_BPS = 12.0
+        INVENTORY_SKEW_BPS = 6.0
         skew_bps = inv_ratio * INVENTORY_SKEW_BPS
         skew_px = mid * skew_bps / 10000.0
 
