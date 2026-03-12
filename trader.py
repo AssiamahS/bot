@@ -158,7 +158,7 @@ quotes_placed = 0
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
 SHADE_PCT = 0.05  # compress quotes 5% toward mid for faster trip completion
-STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
+STALE_BPS = 8  # refresh orders if price moved >8bps (reduce churn to stay under request limit)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 6.0 bps
@@ -187,7 +187,7 @@ ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
 last_quote_time = {}  # coin -> timestamp of last quote update
-MIN_QUOTE_INTERVAL = 3.5  # throttle to avoid 429 rate limits
+MIN_QUOTE_INTERVAL = 6.0  # throttle: reduce request churn for volume/request ratio
 
 # Trade flow tracking (updated by WS trades callback)
 recent_trades = {}  # coin -> deque of {"ts", "px", "sz", "side"}
@@ -543,6 +543,12 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
         # SDK may return a string error or a dict
         if isinstance(order_result, str):
             print(f"  Order rejected: {order_result}")
+            return None
+        # Check for top-level error (request limit, etc)
+        if isinstance(order_result, dict) and order_result.get("status") == "err":
+            err_msg = order_result.get("response", "unknown error")
+            side = "BUY" if is_buy else "SELL"
+            print(f"  {side} RATE CAPPED ({coin} {size}@{price}): {err_msg}")
             return None
         resp = order_result.get("response", {}) if isinstance(order_result, dict) else {}
         data = resp.get("data", {}) if isinstance(resp, dict) else {}
