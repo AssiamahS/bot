@@ -616,6 +616,16 @@ def check_fills(info, address):
                     adverse_size_mult[coin] = 0.5
                     # Hard lockout: stop quoting this side entirely
                     adverse_side_locked[coin] = {"side": side, "until": now_fill + 120.0}
+                    # Cancel resting orders on locked side immediately
+                    try:
+                        _ords = info.open_orders(address)
+                        for _o in _ords:
+                            if _o.get('coin') == coin and _o.get('side') == side:
+                                try: exchange.cancel(coin, _o['oid'])
+                                except: pass
+                        print(f'  >>> LOCKOUT: cancelled {coin} {side}-side resting orders')
+                    except Exception:
+                        pass
                     tg_send(f"🔒 <b>SIDE LOCKED</b> {coin}: {consec}x{side} - blocking for 120s")
                 elif consec >= 3:
                     consec_warn = f" ⚠️{consec}x{side} PAUSED"
@@ -891,7 +901,7 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     hold_penalty = 0.0
     if open_leg:
         hold_secs = time.time() - open_leg.get("time", time.time())
-        hold_penalty = min(hold_secs / 60.0 * 2.0, 10.0)  # 2bps per minute held, cap 10
+        hold_penalty = min(hold_secs / 60.0 * 1.5, 5.0)  # 1.5bps per minute held, cap 5
 
     score = mkt_spread_bps - fee_penalty - vol_penalty - flow_penalty - crowd_penalty - inv_penalty - hold_penalty
 
