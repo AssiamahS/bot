@@ -1106,28 +1106,22 @@ def run_cycle(info, exchange, address):
         if MAX_INVENTORY_USD > 0:
             inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
 
-        # Side gating — reduce-only when inventory is heavy
-        REDUCE_ONLY_THRESHOLD = 0.60
-        HARD_STOP_THRESHOLD = 0.85
-
+        # Soft inventory bias — tilt quotes instead of blocking sides
+        # Both sides stay active, but the accumulating side gets pushed away
+        # and the exit side gets pulled closer to market
         allow_buy = True
         allow_sell = True
+        inv_extra_skew = 0.0
 
-        if inv_ratio >= REDUCE_ONLY_THRESHOLD:
-            allow_buy = False
-        if inv_ratio <= -REDUCE_ONLY_THRESHOLD:
-            allow_sell = False
-        if inv_ratio >= HARD_STOP_THRESHOLD:
-            allow_buy = False
-            allow_sell = True
-        if inv_ratio <= -HARD_STOP_THRESHOLD:
-            allow_buy = True
-            allow_sell = False
-
-        # Extreme inventory: force flatten aggressively instead of freezing
+        if abs(inv_ratio) > 0.50:
+            # Moderate inventory: add extra skew to encourage exit
+            inv_extra_skew = abs(inv_ratio) * 8.0  # up to 8bps extra tilt
+        if abs(inv_ratio) > 0.85:
+            # Heavy inventory: widen spread on accumulating side significantly
+            inv_extra_skew = abs(inv_ratio) * 14.0  # up to 14bps extra tilt
+            spread_bps += 4
         if abs(inv_ratio) > 1.1:
-            allow_buy = True
-            allow_sell = True
+            # Extreme: add even more spread to protect
             spread_bps += 6
 
         # Flow-based adverse selection protection
@@ -1258,9 +1252,11 @@ def run_cycle(info, exchange, address):
         buy_price = round(buy_price + shade_amount, p_dec)
         sell_price = round(sell_price - shade_amount, p_dec)
 
-        # Apply inventory skew
-        buy_price = round(buy_price - skew_px, p_dec)
-        sell_price = round(sell_price - skew_px, p_dec)
+        # Apply inventory skew + soft bias
+        total_skew = skew_bps + (inv_extra_skew * (1 if inv_ratio > 0 else -1))
+        total_skew_px = mid * total_skew / 10000.0
+        buy_price = round(buy_price - total_skew_px, p_dec)
+        sell_price = round(sell_price - total_skew_px, p_dec)
 
         # Apply flow shift
         if flow_shift_applied != 0:
