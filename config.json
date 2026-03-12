@@ -1,0 +1,15 @@
+{
+    "wallet_private_key": "0x85f4ca52b5ed55cc2e1289d50810d4c2a1ebf2e4813d69b1b282f8c5e6bf3761",
+    "wallet_address": "0x253831C30282760880c4833E600e897f07AdC5aE",
+    "use_testnet": false,
+    "tg_token": "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU",
+    "tg_chat_id": "8727843043",
+    "pairs": [
+        "DYDX-PERP"
+    ],
+    "order_size_usd": 12.0,
+    "refresh_secs": 5,
+    "min_spread_bps": 4.0,
+    "profitability_mode": "balanced",
+    "safety_bps_aggressive": 2.0
+}
