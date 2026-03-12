@@ -997,14 +997,16 @@ def run_cycle(info, exchange, address):
     # Must be in top MAX_QUOTE_PAIRS AND score above threshold
     quote_pairs = set()
     skip_pairs = set()
+    exit_only_pairs = set()  # pairs where only exit side is allowed
     for i, (pair, coin, score, _) in enumerate(pair_scores):
         has_inventory = coin in positions and positions[coin].get("size", 0) != 0
         if i < MAX_QUOTE_PAIRS and score >= MIN_SCORE_THRESHOLD:
             quote_pairs.add(pair)
         elif has_inventory:
-            # Always allow quoting when holding inventory — exit side needs to stay active
+            # Score too low for entry, but inventory must be unwound
+            exit_only_pairs.add(pair)
             quote_pairs.add(pair)
-            print(f"  {coin} | SCORE OVERRIDE: {score:+.1f} < {MIN_SCORE_THRESHOLD} but inventory held — allowing exit quotes")
+            print(f"  {coin} | EXIT-ONLY: score {score:+.1f} < {MIN_SCORE_THRESHOLD}, allowing exit side")
         else:
             skip_pairs.add(pair)
 
@@ -1111,23 +1113,29 @@ def run_cycle(info, exchange, address):
         if MAX_INVENTORY_USD > 0:
             inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
 
-        # Soft inventory bias — tilt quotes instead of blocking sides
-        # Both sides stay active, but the accumulating side gets pushed away
-        # and the exit side gets pulled closer to market
+        # Entry/Exit split: exits always allowed, entries gated by score
+        is_exit_only = pair in exit_only_pairs
         allow_buy = True
         allow_sell = True
         inv_extra_skew = 0.0
 
-        if abs(inv_ratio) > 0.50:
-            # Moderate inventory: add extra skew to encourage exit
-            inv_extra_skew = abs(inv_ratio) * 8.0  # up to 8bps extra tilt
-        if abs(inv_ratio) > 0.85:
-            # Heavy inventory: widen spread on accumulating side significantly
-            inv_extra_skew = abs(inv_ratio) * 14.0  # up to 14bps extra tilt
-            spread_bps += 4
-        if abs(inv_ratio) > 1.1:
-            # Extreme: add even more spread to protect
-            spread_bps += 6
+        if is_exit_only:
+            # Score below threshold — only allow the exit side
+            if pos_size > 0:
+                allow_buy = False   # long: only sell to exit
+            elif pos_size < 0:
+                allow_sell = False  # short: only buy to exit
+            # Extra aggressive exit: tighter spread on exit side
+            inv_extra_skew = abs(inv_ratio) * 4.0 if abs(inv_ratio) > 0.3 else 0
+        else:
+            # Full quoting mode — apply soft bias for inventory management
+            if abs(inv_ratio) > 0.50:
+                inv_extra_skew = abs(inv_ratio) * 8.0
+            if abs(inv_ratio) > 0.85:
+                inv_extra_skew = abs(inv_ratio) * 14.0
+                spread_bps += 4
+            if abs(inv_ratio) > 1.1:
+                spread_bps += 6
 
         # Flow-based adverse selection protection
         # If trade flow is heavily one-sided, stop quoting the side that gets picked off
