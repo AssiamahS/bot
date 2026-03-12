@@ -1221,19 +1221,24 @@ def run_cycle(info, exchange, address):
             inventory_samples.pop(0)
 
         if spread_ticks >= required_ticks:
-            # Queue-aware pennying: step inside crowded levels, join thin ones
+            # Queue-priority nudging: always step at least 1 tick inside spread
+            # This guarantees front-of-queue position for our small order size
             bid_sz = price_data.get("bid_size", 0)
             ask_sz = price_data.get("ask_size", 0)
-            # Penny (step inside) if top level has a wall; join if thin
-            bid_step = 1 if bid_sz > 5 else 0  # >5 units = crowded, penny to jump
-            ask_step = 1 if ask_sz > 5 else 0
-            if spread_ticks >= required_ticks + 3:
-                bid_step = min(bid_step + 1, 2)
-                ask_step = min(ask_step + 1, 2)
+            # Always nudge 1 tick; add extra tick if crowded or spread is very wide
+            bid_step = 1  # always step inside for queue priority
+            ask_step = 1
+            if bid_sz > 5:
+                bid_step += 1  # crowded level, step further
+            if ask_sz > 5:
+                ask_step += 1
+            if spread_ticks >= required_ticks + 5:
+                bid_step = min(bid_step + 1, 3)
+                ask_step = min(ask_step + 1, 3)
             buy_price = round(best_bid + bid_step * tick, p_dec)
             sell_price = round(best_ask - ask_step * tick, p_dec)
-            buy_reason = f"penny x{bid_step}" if bid_step > 0 else "join bid"
-            sell_reason = f"penny x{ask_step}" if ask_step > 0 else "join ask"
+            buy_reason = f"nudge x{bid_step}" if bid_step > 0 else "join bid"
+            sell_reason = f"nudge x{ask_step}" if ask_step > 0 else "join ask"
         else:
             # Spread too tight for profitability — gate it
             expected_net_tight = mkt_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
