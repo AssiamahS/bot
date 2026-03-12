@@ -676,7 +676,7 @@ def check_fills(info, address):
                 leg = trip_tracker.get(coin)
                 if leg is None:
                     # First leg of a new trip
-                    trip_tracker[coin] = {"side": side, "price": price, "size": size, "fee": fee, "time": time.time()}
+                    trip_tracker[coin] = {"side": side, "price": price, "size": size, "fee": fee, "time": time.time(), "anchor_price": price}
                 elif leg["side"] != side:
                     # Opposite side = completing a round trip!
                     trip_size = min(leg["size"], size)
@@ -713,10 +713,17 @@ def check_fills(info, address):
                     else:
                         trip_tracker.pop(coin, None)
                 else:
-                    # Same side fill = averaging in, update tracker
+                    # Same side fill = adding to position
                     total_size = leg["size"] + size
                     avg_price = (leg["price"] * leg["size"] + price * size) / total_size
-                    trip_tracker[coin] = {"side": side, "price": avg_price, "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
+                    # Keep anchor_price as the first fill — exit targets use this
+                    anchor = leg.get("anchor_price", leg["price"])
+                    trip_tracker[coin] = {"side": side, "price": avg_price, "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"], "anchor_price": anchor}
+                    # Cap at 2 same-side layers — prevent runaway inventory
+                    layers = leg.get("layers", 1) + 1
+                    trip_tracker[coin]["layers"] = layers
+                    if layers >= 2:
+                        print(f"  >>> MAX LAYERS ({layers}): {coin} {side}-side capped, exit-only until unwound")
 
                 fill = {
                     "time": time.time(),
@@ -1387,8 +1394,15 @@ def run_cycle(info, exchange, address):
                 closest_buy = min(existing_buys.keys(), key=lambda p: abs(p - buy_levels[0]))
                 top_buy_drift = abs(closest_buy - buy_levels[0]) / mid * 10000
 
-            if top_buy_drift > STALE_BPS or len(existing_buys) != num_levels:
-                # Cancel all existing buys and re-place
+            # Queue persistence: keep orders that are still competitive
+            # Only replace if drift exceeds threshold AND order is not near best bid
+            best_bid_near = any(abs(px - best_bid) <= tick for px in existing_buys) if existing_buys else False
+            must_replace = (top_buy_drift > STALE_BPS and not best_bid_near) or len(existing_buys) != num_levels
+            # Always replace if price crossed (order is behind the market)
+            if existing_buys and any(px > best_ask for px in existing_buys):
+                must_replace = True
+
+            if must_replace:
                 for oid in existing_buys.values():
                     try: exchange.cancel(coin, oid)
                     except: pass
@@ -1418,7 +1432,13 @@ def run_cycle(info, exchange, address):
                 closest_sell = min(existing_sells.keys(), key=lambda p: abs(p - sell_levels[0]))
                 top_sell_drift = abs(closest_sell - sell_levels[0]) / mid * 10000
 
-            if top_sell_drift > STALE_BPS or len(existing_sells) != num_levels:
+            # Queue persistence: keep competitive sell orders
+            best_ask_near = any(abs(px - best_ask) <= tick for px in existing_sells) if existing_sells else False
+            must_replace = (top_sell_drift > STALE_BPS and not best_ask_near) or len(existing_sells) != num_levels
+            if existing_sells and any(px < best_bid for px in existing_sells):
+                must_replace = True
+
+            if must_replace:
                 for oid in existing_sells.values():
                     try: exchange.cancel(coin, oid)
                     except: pass
