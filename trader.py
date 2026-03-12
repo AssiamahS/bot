@@ -998,8 +998,13 @@ def run_cycle(info, exchange, address):
     quote_pairs = set()
     skip_pairs = set()
     for i, (pair, coin, score, _) in enumerate(pair_scores):
+        has_inventory = coin in positions and positions[coin].get("size", 0) != 0
         if i < MAX_QUOTE_PAIRS and score >= MIN_SCORE_THRESHOLD:
             quote_pairs.add(pair)
+        elif has_inventory:
+            # Always allow quoting when holding inventory — exit side needs to stay active
+            quote_pairs.add(pair)
+            print(f"  {coin} | SCORE OVERRIDE: {score:+.1f} < {MIN_SCORE_THRESHOLD} but inventory held — allowing exit quotes")
         else:
             skip_pairs.add(pair)
 
