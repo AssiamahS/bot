@@ -141,8 +141,10 @@ round_trips = 0  # completed buy+sell cycles
 # Round-trip tracking: measure actual profit per completed cycle
 # A round trip = buy fill followed by sell fill (or vice versa) on same coin
 trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
+# trip_tracker is reset on every startup — hold_penalty starts clean
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
 fill_edges = []  # edge in bps per fill, for realized spread tracking
+post_fill_checks = []  # list of {"coin", "side", "price", "check_at"} for delayed edge tracking
 consecutive_side = {"coin": "", "side": "", "count": 0, "first_time": 0}  # adverse selection detector
 adverse_pause_until = {}  # coin -> timestamp, pause vulnerable side after consecutive fills
 strategy_pause_until = 0  # global pause when avg trip net is negative
@@ -560,7 +562,7 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
         elif statuses and isinstance(statuses[0], dict) and "error" in statuses[0]:
             print(f"  Order rejected: {statuses[0]['error']}")
     except Exception as e:
-        print(f"  Order error: {e}")
+        print(f"  Order error ({coin} {'BUY' if is_buy else 'SELL'} {size}@{price}): {e}")
     return None
 
 
@@ -592,6 +594,8 @@ def check_fills(info, address):
                 edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
 
                 fill_edges.append(edge_bps)
+                # Schedule post-fill edge check in 3 seconds
+                post_fill_checks.append({"coin": coin, "side": side, "price": price, "check_at": time.time() + 3.0})
 
                 # Adverse selection detector with timing
                 now_fill = time.time()
@@ -1248,16 +1252,13 @@ def run_cycle(info, exchange, address):
             # This guarantees front-of-queue position for our small order size
             bid_sz = price_data.get("bid_size", 0)
             ask_sz = price_data.get("ask_size", 0)
-            # Always nudge 1 tick; add extra tick if crowded or spread is very wide
+            # Nudge 1 tick inside; add 1 more if crowded. Cap at 2 to avoid ALO rejections.
             bid_step = 1  # always step inside for queue priority
             ask_step = 1
-            if bid_sz > 5:
-                bid_step += 1  # crowded level, step further
-            if ask_sz > 5:
-                ask_step += 1
-            if spread_ticks >= required_ticks + 5:
-                bid_step = min(bid_step + 1, 3)
-                ask_step = min(ask_step + 1, 3)
+            if bid_sz > 5 and spread_ticks >= required_ticks + 3:
+                bid_step = 2  # crowded + wide spread, step further
+            if ask_sz > 5 and spread_ticks >= required_ticks + 3:
+                ask_step = 2
             buy_price = round(best_bid + bid_step * tick, p_dec)
             sell_price = round(best_ask - ask_step * tick, p_dec)
             buy_reason = f"nudge x{bid_step}" if bid_step > 0 else "join bid"
@@ -1304,7 +1305,9 @@ def run_cycle(info, exchange, address):
         if sell_price <= best_bid:
             sell_price = round(best_bid + tick, p_dec)
         if sell_price <= buy_price:
-            sell_price = round(buy_price + tick, p_dec)
+            # Quotes crossed after adjustments — widen minimally
+            sell_price = round(buy_price + 2 * tick, p_dec)
+            print(f"  {coin} | CROSS FIX: sell was <= buy, widened to {sell_price}")
 
         # FINAL profitability check on actual quotes after all adjustments
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
@@ -1438,6 +1441,24 @@ def run_cycle(info, exchange, address):
                 "volume": float(o.get("sz", 0)), "price": float(o.get("limitPx", 0)),
                 "id": str(o.get("oid", "")),
             })
+
+    # Process post-fill edge checks (delayed adverse selection detection)
+    now_pf = time.time()
+    remaining_checks = []
+    for pfc in post_fill_checks:
+        if now_pf >= pfc["check_at"]:
+            pfb = get_ws_book(pfc["coin"])
+            if pfb:
+                pf_mid = pfb["mid"]
+                if pfc["side"] == "B":
+                    pf_edge = (pf_mid - pfc["price"]) / pf_mid * 10000
+                else:
+                    pf_edge = (pfc["price"] - pf_mid) / pf_mid * 10000
+                marker = "OK" if pf_edge > 0 else "ADVERSE"
+                print(f"  POST-FILL [{pfc['coin']}]: {pf_edge:+.1f}bps after 3s ({marker})")
+        else:
+            remaining_checks.append(pfc)
+    post_fill_checks[:] = remaining_checks
 
     # Check fills (every 3rd cycle to reduce API calls)
     global _fill_check_counter
