@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyperliquid Branch Report Card</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0b1020; color: #dbe4ff; }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .title { font-size: 24px; font-weight: 700; }
+    .sub { font-size: 13px; color: #94a3b8; }
+    .btn { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #1e293b; padding: 10px 8px; text-align: left; vertical-align: top; }
+    th { color: #93c5fd; font-weight: 600; position: sticky; top: 0; background: #0f172a; }
+    tr:hover { background: #111c35; }
+    .ok { color: #22c55e; }
+    .warn { color: #f59e0b; }
+    .bad { color: #ef4444; }
+    .muted { color: #94a3b8; }
+    code { background: #111827; padding: 2px 6px; border-radius: 6px; }
+    .small { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="title">Branch PnL Report Card</div>
+        <div class="sub">Repo: <a id="repo" href="#" target="_blank"></a> · Generated: <span id="generated">--</span></div>
+      </div>
+      <button class="btn" onclick="load()">Refresh</button>
+    </div>
+
+    <div class="panel small" id="notes"></div>
+
+    <div class="panel">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Branch</th>
+            <th>Commit</th>
+            <th>Commit Time</th>
+            <th>Strategy</th>
+            <th>Fills</th>
+            <th>Closed PnL</th>
+            <th>Fees</th>
+            <th>Net (Closed-Fees)</th>
+            <th>Trip Avg Net</th>
+            <th>Trip Fee Ratio</th>
+            <th>Avg Edge bps</th>
+            <th>Evidence</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function fmt(v, d = 4) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "--";
+      return Number(v).toFixed(d);
+    }
+    function money(v) { return v === null || v === undefined ? "--" : `$${fmt(v, 4)}`; }
+    function clsByNet(v) {
+      if (v === null || v === undefined) return "muted";
+      if (v > 0) return "ok";
+      if (v < 0) return "bad";
+      return "muted";
+    }
+    function clsByEvidence(s) {
+      if (!s) return "muted";
+      if (s.includes("measured")) return "ok";
+      if (s.includes("unknown")) return "warn";
+      return "muted";
+    }
+
+    async function load() {
+      const res = await fetch(`/branch-report.json?t=${Date.now()}`);
+      const data = await res.json();
+      document.getElementById("generated").textContent = data.generated_at || "--";
+      const repo = document.getElementById("repo");
+      repo.href = data.repo || "#";
+      repo.textContent = data.repo || "--";
+
+      document.getElementById("notes").innerHTML = (data.notes || []).map(n => `• ${n}`).join("<br>");
+
+      const tbody = document.querySelector("#tbl tbody");
+      tbody.innerHTML = "";
+      (data.rows || []).forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><code>${r.branch || "--"}</code></td>
+          <td><code>${r.commit || "--"}</code></td>
+          <td>${r.commit_time || "--"}</td>
+          <td>${r.strategy_summary || "--"}</td>
+          <td>${r.fills ?? "--"}</td>
+          <td class="${clsByNet(r.closed_pnl_sum)}">${money(r.closed_pnl_sum)}</td>
+          <td>${money(r.fee_sum)}</td>
+          <td class="${clsByNet(r.net_after_fees)}">${money(r.net_after_fees)}</td>
+          <td class="${clsByNet(r.trip_avg_net)}">${money(r.trip_avg_net)}</td>
+          <td>${r.trip_fee_ratio ?? "--"}</td>
+          <td>${r.avg_edge_bps ?? "--"}</td>
+          <td class="${clsByEvidence(r.status)}">${r.status || "--"}</td>
+          <td>${r.notes || "--"}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    load();
+    setInterval(load, 15000);
+  </script>
+</body>
+</html>

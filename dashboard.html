@@ -41,13 +41,6 @@
   .pair-stat .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
   .rebate { color: #3fb950; }
   .network-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #1f2937; color: #a371f7; margin-left: 8px; }
-  .tabs { display: flex; gap: 0; margin-bottom: 0; background: #161b22; border-bottom: 1px solid #30363d; padding: 0 24px; }
-  .tab { padding: 10px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: #8b949e; border-bottom: 2px solid transparent; transition: all 0.15s; }
-  .tab:hover { color: #c9d1d9; }
-  .tab.active { color: #a371f7; border-bottom-color: #a371f7; }
-  .tab .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .tab .dot.live { background: #3fb950; }
-  .tab .dot.off { background: #484f58; }
 </style>
 </head>
 <body>
@@ -62,12 +55,6 @@
     <button class="refresh-btn" onclick="refresh()">Refresh</button>
     <span class="status offline" id="bot-status">Offline</span>
   </div>
-</div>
-<div class="tabs">
-  <div class="tab active" data-bot="all" onclick="switchTab('all')"><span class="dot off" id="dot-all"></span>ALL</div>
-  <div class="tab" data-bot="sol" onclick="switchTab('sol')"><span class="dot off" id="dot-sol"></span>SOL</div>
-  <div class="tab" data-bot="btc" onclick="switchTab('btc')"><span class="dot off" id="dot-btc"></span>BTC</div>
-  <div class="tab" data-bot="eth" onclick="switchTab('eth')"><span class="dot off" id="dot-eth"></span>ETH</div>
 </div>
 
 <div class="container">
@@ -112,86 +99,11 @@ function fmt(n, d=2) { return n == null || isNaN(n) ? '--' : Number(n).toLocaleS
 function usd(n) { return n == null ? '--' : '$' + fmt(n); }
 function pnlClass(n) { return n > 0 ? 'positive' : n < 0 ? 'negative' : 'neutral'; }
 
-let activeTab = location.hash.replace('#','') || 'all';
-if (!['all','sol','btc','eth'].includes(activeTab)) activeTab = 'all';
-const STATUS_FILES = { all: '/status/all.json', sol: '/status/sol.json', btc: '/status/btc.json', eth: '/status/eth.json' };
-
-function switchTab(tab) {
-  activeTab = tab;
-  location.hash = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`.tab[data-bot="${tab}"]`).classList.add('active');
-  refresh();
-}
-
-// Set correct tab on load
-document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-document.querySelector(`.tab[data-bot="${activeTab}"]`).classList.add('active');
-
-// Merge multiple bot status files into one combined view
-function mergeStatuses(statuses) {
-  const merged = { running: false, portfolio_value: 0, portfolio_pnl: 0, initial_portfolio_value: 0,
-    total_trade_count: 0, total_fees: 0, total_rebates: 0, pairs: [], pair_status: {},
-    order_size_usd: 0, active_orders: [], recent_fills: [], prices: {}, updated_at: 0, network: 'mainnet' };
-  let anyRunning = false;
-  let gotAccount = false;
-  for (const d of statuses) {
-    if (!d) continue;
-    if (d.running) anyRunning = true;
-    // Portfolio value: same wallet, take once. Bot PnL: sum per-bot trading PnL.
-    if (!gotAccount && d.portfolio_value) {
-      merged.portfolio_value = d.portfolio_value;
-      merged.initial_portfolio_value = d.initial_portfolio_value || 0;
-      gotAccount = true;
-    }
-    merged.bot_realized_pnl = (merged.bot_realized_pnl || 0) + (d.bot_realized_pnl || 0);
-    merged.bot_net_pnl = (merged.bot_net_pnl || 0) + (d.bot_net_pnl || 0);
-    // These are per-bot, so sum them
-    merged.total_trade_count += d.total_trade_count || 0;
-    merged.total_fees += d.total_fees || 0;
-    merged.total_rebates += d.total_rebates || 0;
-    merged.pairs = merged.pairs.concat(d.pairs || []);
-    Object.assign(merged.pair_status, d.pair_status || {});
-    merged.active_orders = merged.active_orders.concat(d.active_orders || []);
-    merged.recent_fills = merged.recent_fills.concat(d.recent_fills || []);
-    Object.assign(merged.prices, d.prices || {});
-    merged.updated_at = Math.max(merged.updated_at, d.updated_at || 0);
-    merged.network = d.network || merged.network;
-  }
-  merged.running = anyRunning;
-  merged.recent_fills.sort((a,b) => (b.time||0) - (a.time||0));
-  merged.recent_fills = merged.recent_fills.slice(0, 20);
-  return merged;
-}
-
 async function refresh() {
-  // Update tab dots
-  for (const bot of ['sol','btc','eth']) {
-    try {
-      const r = await fetch(STATUS_FILES[bot] + '?t=' + Date.now());
-      if (r.ok) {
-        const s = await r.json();
-        const age = (Date.now()/1000) - (s.updated_at || 0);
-        const dot = document.getElementById('dot-' + bot);
-        dot.className = 'dot ' + (s.running && age < 120 ? 'live' : 'off');
-      }
-    } catch(e) {}
-  }
-
   try {
-    let d;
-    if (activeTab === 'all') {
-      const results = await Promise.all(['sol','btc','eth'].map(async b => {
-        try { const r = await fetch(STATUS_FILES[b] + '?t=' + Date.now()); return r.ok ? await r.json() : null; }
-        catch(e) { return null; }
-      }));
-      d = mergeStatuses(results);
-      document.getElementById('dot-all').className = 'dot ' + (d.running ? 'live' : 'off');
-    } else {
-      const res = await fetch(STATUS_FILES[activeTab] + '?t=' + Date.now());
-      if (!res.ok) throw new Error('No status file');
-      d = await res.json();
-    }
+    const res = await fetch('/trader_status.json?t=' + Date.now());
+    if (!res.ok) throw new Error('No status file');
+    const d = await res.json();
 
     const age = (Date.now()/1000) - (d.updated_at || 0);
     const alive = d.running && age < 120;
@@ -203,15 +115,13 @@ async function refresh() {
     document.getElementById('portfolio-value').textContent = usd(d.portfolio_value);
     document.getElementById('portfolio-start').textContent = d.initial_portfolio_value ? 'Started at ' + usd(d.initial_portfolio_value) : '--';
 
-    // Show bot's actual trading PnL (realized from fills), not account value change
-    const botPnl = d.bot_net_pnl != null ? d.bot_net_pnl : (d.portfolio_pnl || 0);
+    const pnl = d.portfolio_pnl || 0;
     const pnlEl = document.getElementById('portfolio-pnl');
-    pnlEl.textContent = (botPnl >= 0 ? '+' : '') + usd(botPnl);
-    pnlEl.className = 'metric ' + pnlClass(botPnl);
+    pnlEl.textContent = (pnl >= 0 ? '+' : '') + usd(pnl);
+    pnlEl.className = 'metric ' + pnlClass(pnl);
 
     const totalFees = d.total_fees || 0;
-    const realized = d.bot_realized_pnl || 0;
-    const feeLabel = `Realized: ${usd(realized)} | Fees: ${usd(totalFees)}`;
+    const feeLabel = totalFees < 0 ? `Rebates earned: +${usd(-totalFees)}` : `Fees paid: ${usd(totalFees)}`;
     document.getElementById('pnl-fees').textContent = feeLabel;
 
     document.getElementById('total-fills').textContent = d.total_trade_count || 0;
@@ -281,11 +191,10 @@ async function refresh() {
     // Fills
     const fc = document.getElementById('fills-card');
     if (d.recent_fills && d.recent_fills.length > 0) {
-      let html = '<table><tr><th>Time</th><th>Pair</th><th>Side</th><th>Price</th><th>Size</th><th>Fee</th><th>Net</th></tr>';
+      let html = '<table><tr><th>Time</th><th>Pair</th><th>Side</th><th>Price</th><th>Size</th><th>Fee</th><th>PnL</th></tr>';
       for (const f of [...d.recent_fills].reverse()) {
         const t = new Date(f.time * 1000).toLocaleTimeString();
         const feeStr = f.fee < 0 ? `<span class="rebate">+$${fmt(-f.fee, 4)}</span>` : `$${fmt(f.fee, 4)}`;
-        const net = (f.closed_pnl || 0) - (f.fee || 0);
         html += `<tr>
           <td>${t}</td>
           <td>${f.pair}</td>
@@ -293,7 +202,7 @@ async function refresh() {
           <td>${usd(f.price)}</td>
           <td>${fmt(f.volume, 4)}</td>
           <td>${feeStr}</td>
-          <td class="${pnlClass(net)}">${net >= 0 ? '+' : ''}$${fmt(net, 4)}</td>
+          <td class="${pnlClass(f.closed_pnl || 0)}">${usd(f.closed_pnl || 0)}</td>
         </tr>`;
       }
       fc.innerHTML = html + '</table>';
