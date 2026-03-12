@@ -901,11 +901,12 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     inv_penalty = inv_ratio * inv_ratio * 6.0  # 0 at empty, 1.5bps at 50%, 6.0bps at max
 
     # Hold-time penalty: if we have an open leg on this coin, penalize based on age
+    # Capped at 2.0 to avoid tanking score below threshold (which blocks exit quoting)
     open_leg = trip_tracker.get(coin)
     hold_penalty = 0.0
     if open_leg:
         hold_secs = time.time() - open_leg.get("time", time.time())
-        hold_penalty = min(hold_secs / 60.0 * 1.5, 5.0)  # 1.5bps per minute held, cap 5
+        hold_penalty = min(hold_secs / 60.0 * 1.0, 2.0)  # 1bps per minute held, cap 2
 
     score = mkt_spread_bps - fee_penalty - vol_penalty - flow_penalty - crowd_penalty - inv_penalty - hold_penalty
 
@@ -1139,8 +1140,9 @@ def run_cycle(info, exchange, address):
                 allow_buy = False   # long: only sell to exit
             elif pos_size < 0:
                 allow_sell = False  # short: only buy to exit
-            # Extra aggressive exit: tighter spread on exit side
-            inv_extra_skew = abs(inv_ratio) * 4.0 if abs(inv_ratio) > 0.3 else 0
+            # Aggressive exit: compress spread and skew toward exit
+            inv_extra_skew = max(abs(inv_ratio) * 6.0, 2.0)
+            spread_bps = max(spread_bps - 2, MIN_SPREAD_BPS)  # tighter spread for faster exit
         else:
             # Full quoting mode — apply soft bias for inventory management
             if abs(inv_ratio) > 0.50:
@@ -1162,16 +1164,25 @@ def run_cycle(info, exchange, address):
                 allow_sell = False
 
         # Hard lockout: block side entirely after consecutive adverse fills
+        # EXCEPTION: never block the exit side when holding inventory
         lock = adverse_side_locked.get(coin)
         if lock:
             if time.time() < lock["until"]:
                 remaining = int(lock["until"] - time.time())
                 if lock["side"] == "B":
-                    allow_buy = False
-                    print(f"  {coin} | BUY LOCKED ({remaining}s)")
+                    if pos_size < 0:
+                        # Short position needs to buy to exit — allow it
+                        print(f"  {coin} | BUY LOCKED ({remaining}s) but SHORT needs exit — ALLOWING")
+                    else:
+                        allow_buy = False
+                        print(f"  {coin} | BUY LOCKED ({remaining}s)")
                 else:
-                    allow_sell = False
-                    print(f"  {coin} | SELL LOCKED ({remaining}s)")
+                    if pos_size > 0:
+                        # Long position needs to sell to exit — allow it
+                        print(f"  {coin} | SELL LOCKED ({remaining}s) but LONG needs exit — ALLOWING")
+                    else:
+                        allow_sell = False
+                        print(f"  {coin} | SELL LOCKED ({remaining}s)")
             else:
                 adverse_side_locked.pop(coin, None)
 
