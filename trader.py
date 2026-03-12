@@ -561,6 +561,16 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
             return oid
         elif statuses and isinstance(statuses[0], dict) and "error" in statuses[0]:
             print(f"  Order rejected: {statuses[0]['error']}")
+        elif statuses and isinstance(statuses[0], dict) and "filled" in statuses[0]:
+            # ALO was immediately filled (price crossed the book)
+            oid = statuses[0]["filled"]["oid"]
+            side = "BUY" if is_buy else "SELL"
+            print(f"  {side:4s} {size} {coin} @ ${price} -> {oid} (FILLED IMMEDIATELY)")
+            return oid
+        else:
+            # Unknown status — log it so we can diagnose
+            side = "BUY" if is_buy else "SELL"
+            print(f"  {side} UNKNOWN RESPONSE ({coin} {size}@{price}): {order_result}")
     except Exception as e:
         print(f"  Order error ({coin} {'BUY' if is_buy else 'SELL'} {size}@{price}): {e}")
     return None
