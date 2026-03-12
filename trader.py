@@ -20,6 +20,7 @@ from eth_account import Account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
+from tg_commander import TelegramCommander
 
 # Telegram alerts
 TG_TOKEN = "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU"
@@ -47,31 +48,53 @@ PAIRS = config.get("pairs", ["SOL-PERP", "BTC-PERP", "ETH-PERP"])
 ORDER_SIZE_USD = config.get("order_size_usd", 10.0)
 REFRESH_SECS = config.get("refresh_secs", 15)
 MIN_SPREAD_BPS = config.get("min_spread_bps", 5)  # 5 bps = 0.05%
-PROFITABILITY_MODE = config.get("profitability_mode", "strict")  # "strict" or "aggressive"
+PROFITABILITY_MODE = config.get("profitability_mode", "strict").lower()  # strict or aggressive
 SAFETY_BPS_STRICT = config.get("safety_bps_strict", 1.5)
 SAFETY_BPS_AGGRESSIVE = config.get("safety_bps_aggressive", 0.5)
 
-# Hyperliquid asset indices (mainnet)
-# These map coin names to their index on Hyperliquid
-COIN_MAP = {
-    "BTC-PERP": "BTC",
-    "ETH-PERP": "ETH",
-    "SOL-PERP": "SOL",
-}
+# Dynamic asset metadata — populated from exchange on startup
+# COIN_MAP: "SOL-PERP" -> "SOL", auto-generated from PAIRS
+COIN_MAP = {p: p.replace("-PERP", "") for p in PAIRS}
 
-# Size decimals per asset (Hyperliquid requires specific precision)
-SIZE_DECIMALS = {
-    "BTC": 5,
-    "ETH": 4,
-    "SOL": 2,
-}
+# These get populated by fetch_asset_metadata() on startup
+SIZE_DECIMALS = {}
+PRICE_DECIMALS = {}
 
-# Price tick sizes (Hyperliquid specific)
-PRICE_DECIMALS = {
-    "BTC": 0,  # $1 ticks
-    "ETH": 1,  # $0.1 ticks
-    "SOL": 3,  # $0.001 ticks (0.1 cent)
-}
+def fetch_asset_metadata():
+    """Fetch szDecimals and price precision from Hyperliquid meta endpoint.
+    Must be called before trading starts."""
+    from hyperliquid.info import Info as _Info
+    from hyperliquid.utils import constants as _c
+    base = _c.TESTNET_API_URL if USE_TESTNET else _c.MAINNET_API_URL
+    _info = _Info(base, skip_ws=True)
+    meta = _info.meta()
+    universe = meta.get("universe", [])
+
+    for asset in universe:
+        coin = asset["name"]
+        SIZE_DECIMALS[coin] = asset.get("szDecimals", 2)
+
+    # Derive price decimals from live book tick
+    for pair in PAIRS:
+        coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
+        if coin not in SIZE_DECIMALS:
+            print(f"  WARNING: {coin} not found in exchange metadata, defaulting szDecimals=2")
+            SIZE_DECIMALS[coin] = 2
+        try:
+            book = _info.l2_snapshot(coin)
+            if book and book["levels"][0]:
+                px_str = book["levels"][0][0]["px"]
+                if "." in px_str:
+                    PRICE_DECIMALS[coin] = len(px_str.split(".")[1])
+                else:
+                    PRICE_DECIMALS[coin] = 0
+                # Derive tick size
+                TICK_SIZE[coin] = 10 ** (-PRICE_DECIMALS[coin])
+                print(f"  {coin}: szDec={SIZE_DECIMALS[coin]} pxDec={PRICE_DECIMALS[coin]} tick={TICK_SIZE[coin]}")
+        except Exception as e:
+            PRICE_DECIMALS.setdefault(coin, 4)
+            TICK_SIZE.setdefault(coin, 0.0001)
+            print(f"  {coin}: using defaults (error: {e})")
 
 running = True
 start_time = time.time()
@@ -88,9 +111,9 @@ initial_portfolio_value = None
 price_history = {COIN_MAP.get(p, p.replace("-PERP", "")): [] for p in PAIRS}
 VOL_WINDOW = 20
 
-# Risk governor limits
+# Risk governor limits (scaled for small portfolio)
 MAX_DRAWDOWN = 0.15
-MAX_INVENTORY_USD = 250
+MAX_INVENTORY_USD = 15  # ~60% of $26 portfolio, split across pairs
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -113,6 +136,7 @@ quotes_skipped_profitability = 0
 quotes_placed = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
+last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
 STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 1.5  # minimum profit per round trip after fees
@@ -121,14 +145,10 @@ QUOTE_LEVELS = 3  # number of price levels per side
 LEVEL_SPACING_TICKS = 3  # ticks between each level
 
 # Queue quality thresholds
-CROWDED_SIZE = 30  # SOL units at top level = crowded queue
-THIN_SIZE = 10     # SOL units at top level = thin (good to join)
+CROWDED_SIZE = 30  # units at top level = crowded queue
+THIN_SIZE = 10     # units at top level = thin (good to join)
 TIGHT_SPREAD_BPS = 6  # below this, spread too tight to compete
-TICK_SIZE = {  # minimum price increment per asset (from exchange)
-    "BTC": 1.0,
-    "ETH": 0.1,
-    "SOL": 0.001,  # SOL tick is 0.1 cent, not 1 cent
-}
+TICK_SIZE = {}  # populated dynamically by fetch_asset_metadata()
 
 # WebSocket live book data (updated by WS callbacks)
 ws_book = {}  # coin -> {"bids": [...], "asks": [...], "ts": time}
@@ -280,6 +300,9 @@ def setup_exchange():
     if not PRIVATE_KEY:
         print("ERROR: Set wallet_private_key in config.json")
         sys.exit(1)
+
+    # Fetch asset metadata (szDecimals, tick sizes) before anything else
+    fetch_asset_metadata()
 
     account = Account.from_key(PRIVATE_KEY)
     address = WALLET_ADDRESS if WALLET_ADDRESS else account.address
@@ -676,6 +699,14 @@ def write_status():
             "recent_fills": pair_fills[p][-10:],
         }
 
+    total_inventory_usd = 0.0
+    for p in PAIRS:
+        c = COIN_MAP.get(p, p.replace("-PERP", ""))
+        pos = last_balances.get("positions", {}).get(c, {})
+        sz = pos.get("size", 0)
+        mid = last_prices.get(p, {}).get("mid", 0)
+        total_inventory_usd += sz * mid
+
     status = {
         "running": running,
         "exchange": "Hyperliquid",
@@ -714,8 +745,10 @@ def write_status():
         "quotes_skipped_profitability": quotes_skipped_profitability,
         "quotes_placed": quotes_placed,
         "gate_skip_pct": round(quotes_skipped_profitability / max(quote_attempts, 1) * 100, 1),
+        "inventory_usd": round(total_inventory_usd, 4),
         "inventory_mean": round(sum(inventory_samples) / max(len(inventory_samples), 1), 2),
         "inventory_variance": round(sum((x - sum(inventory_samples) / max(len(inventory_samples), 1))**2 for x in inventory_samples) / max(len(inventory_samples), 1), 2) if inventory_samples else 0,
+        "last_profitability_diag": last_profitability_diag,
         "updated_at": time.time(),
     }
     try:
@@ -747,7 +780,7 @@ def run_cycle(info, exchange, address):
     Inventory limits control which sides are allowed.
     Only refreshes orders when price drifts >STALE_BPS from our quotes.
     """
-    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed
+    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
@@ -954,6 +987,13 @@ def run_cycle(info, exchange, address):
         required_bps = 2 * MAKER_FEE_BPS + safety_bps
         required_ticks = round((mid * required_bps / 10000) / tick) if tick > 0 else 999
         market_ticks = spread_ticks
+        last_profitability_diag = {
+            "market_spread_bps": round(mkt_spread_bps, 3),
+            "required_bps": round(required_bps, 3),
+            "market_ticks": market_ticks,
+            "required_ticks": required_ticks,
+            "expected_net": 0.0,
+        }
 
         # Track inventory for mean/variance
         inventory_samples.append(inventory_usd)
@@ -972,6 +1012,7 @@ def run_cycle(info, exchange, address):
         else:
             # Spread too tight for profitability — gate it
             expected_net_tight = mkt_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
+            last_profitability_diag["expected_net"] = round(expected_net_tight, 6)
             if coin_orders:
                 for o in coin_orders:
                     try: exchange.cancel(coin, o["oid"])
@@ -1007,6 +1048,7 @@ def run_cycle(info, exchange, address):
 
         # FINAL profitability check on actual quotes after all adjustments
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
+        last_profitability_diag["expected_net"] = round(expected_net, 6)
         if expected_net <= 0:
             if coin_orders:
                 for o in coin_orders:
@@ -1117,7 +1159,7 @@ def run_cycle(info, exchange, address):
             gate_str += " [NO BUY]"
         if not allow_sell:
             gate_str += " [NO SELL]"
-        print(f"  Spread: ${our_spread:.{p_dec}f} ({our_spread_bps:.1f}bps) | ExpNet/trip: ${expected_net:.4f} | Skew: {skew_bps:+.1f}bps{gate_str}")
+        print(f"  Spread: ${our_spread:.{p_dec}f} ({our_spread_bps:.1f}bps) | Gate: mkt={market_ticks}t req={required_ticks}t ({required_bps:.1f}bps) | ExpNet/trip: ${expected_net:.4f} | Skew: {skew_bps:+.1f}bps{gate_str}")
 
         # Print position status
         if pos_size != 0:
@@ -1190,6 +1232,12 @@ def main():
     print("=" * 55)
 
     info, exchange, address = setup_exchange()
+
+    # Start Telegram remote command listener
+    import sys
+    tg_cmd = TelegramCommander(TG_TOKEN, TG_CHAT_ID, sys.modules[__name__])
+    tg_cmd.start()
+
     tg_send(f"🚀 <b>Hyperliquid Bot Started</b>\n{'TESTNET' if USE_TESTNET else 'MAINNET'}\nPairs: {', '.join(PAIRS)}\nSize: ${ORDER_SIZE_USD}/side | Spread: {MIN_SPREAD_BPS}bps | Event-driven")
 
     cycle_count = 0
@@ -1242,6 +1290,7 @@ def main():
             traceback.print_exc()
             time.sleep(2)  # back off on error
 
+    tg_cmd.stop()
     cancel_all_orders(exchange, info, address)
     check_fills(info, address)
     write_status()
