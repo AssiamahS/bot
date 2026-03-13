@@ -907,7 +907,7 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     hold_penalty = 0.0
     if open_leg:
         hold_secs = time.time() - open_leg.get("time", time.time())
-        hold_penalty = min(hold_secs / 60.0 * 2.0, 10.0)  # 2bps per minute held, cap 10
+        hold_penalty = min(hold_secs / 60.0 * 1.0, 3.0)  # 1bps per minute held, cap 3
 
     score = mkt_spread_bps - fee_penalty - vol_penalty - flow_penalty - crowd_penalty - inv_penalty - hold_penalty
 
@@ -942,9 +942,11 @@ def run_cycle(info, exchange, address):
         write_status()
         return
 
-    # Get account state and check open orders
-    get_account_state(info, address)
+    # Use cached account state (refreshed every 30s in main loop)
     account_value = portfolio_value()
+    if account_value <= 0:
+        get_account_state(info, address)
+        account_value = portfolio_value()
     current_orders = get_open_orders_by_coin(info, address)
     active_orders = []  # rebuild for dashboard
     positions = last_balances.get("positions", {})
@@ -965,7 +967,9 @@ def run_cycle(info, exchange, address):
             # Cancel any resting orders on suspended pairs
             coin_orders = current_orders.get(coin, [])
             for o in coin_orders:
-                try: exchange.cancel(coin, o["oid"])
+                try:
+                    exchange.cancel(coin, o["oid"])
+                    track_request()
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1141,6 +1145,7 @@ def run_cycle(info, exchange, address):
                     fresh_size = fresh_pos.get("size", 0)
                     if fresh_size != 0:
                         exchange.market_close(coin)
+                        track_request()
                     else:
                         print(f"  {coin} position already flat, skip market_close")
                 except Exception as e:
@@ -1222,7 +1227,7 @@ def run_cycle(info, exchange, address):
         target_spread = fair_mid * spread_bps / 10000
 
         # Stronger inventory skew: push quotes harder toward flattening
-        INVENTORY_SKEW_BPS = 12.0
+        INVENTORY_SKEW_BPS = 6.0  # reduced: 12 was too aggressive
         skew_bps = inv_ratio * INVENTORY_SKEW_BPS
         skew_px = mid * skew_bps / 10000.0
 
@@ -1234,7 +1239,9 @@ def run_cycle(info, exchange, address):
             print(f"  STRATEGY PAUSE: {remaining}s (avg trip net negative)")
             # Cancel all orders while paused
             for o in coin_orders:
-                try: exchange.cancel(coin, o["oid"])
+                try:
+                    exchange.cancel(coin, o["oid"])
+                    track_request()
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1500,11 +1507,8 @@ def run_cycle(info, exchange, address):
                 "id": str(o.get("oid", "")),
             })
 
-    # Check fills
+    # Check fills (uses REST — will be replaced by WS fills later)
     check_fills(info, address)
-
-    # Refresh state
-    get_account_state(info, address)
 
     pv = portfolio_value()
     elapsed = time.time() - start_time
@@ -1574,16 +1578,20 @@ def main():
                 break
             book_changed.clear()
 
-            # Throttle: don't requote faster than MIN_QUOTE_INTERVAL
+            # Throttle: don't run cycle if all coins were quoted recently
             now = time.time()
+            all_recent = True
+            quote_interval = get_quote_interval()
             for coin in [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]:
                 last_t = last_quote_time.get(coin, 0)
-                quote_interval = get_quote_interval()
-                if now - last_t < quote_interval:
-                    continue  # too soon for this coin
+                if now - last_t >= quote_interval:
+                    all_recent = False
+                    break
+            if all_recent:
+                continue  # skip this cycle, all coins quoted recently
 
-            # Refresh account state periodically (every 10s, not every cycle)
-            if now - last_account_refresh > 10:
+            # Refresh account state periodically (every 30s to save API calls)
+            if now - last_account_refresh > 30:
                 get_account_state(info, address)
                 last_account_refresh = now
 
