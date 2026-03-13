@@ -158,9 +158,10 @@ trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": floa
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
 fill_edges = []  # edge in bps per fill, for realized spread tracking
 post_fill_checks = []  # list of {"coin", "side", "price", "check_at"} for delayed edge tracking
-consecutive_side = {"coin": "", "side": "", "count": 0, "first_time": 0}  # adverse selection detector
+consecutive_side_per_coin = {}  # coin -> {"side": str, "count": int, "first_time": float}
 adverse_pause_until = {}  # coin -> timestamp, pause vulnerable side after consecutive fills
 strategy_pause_until = 0  # global pause when avg trip net is negative
+quoting_paused = False  # remote pause via Telegram /pause command
 adverse_size_mult = {}  # coin -> size multiplier after adverse detection
 adverse_side_locked = {}  # coin -> {"side": "B"/"A", "until": timestamp} - hard lockout after 5+ consecutive fills
 # Gating counters
@@ -629,7 +630,7 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
     return None
 
 
-def check_fills(info, address):
+def check_fills(info, exchange, address):
     """Check for recent fills and track round-trip profitability."""
     global total_trade_count, round_trips, strategy_pause_until
     try:
@@ -660,20 +661,24 @@ def check_fills(info, address):
                 # Schedule post-fill edge check in 3 seconds (PFASR)
                 post_fill_checks.append({"coin": coin, "side": side, "price": price, "check_at": time.time() + 3.0})
 
-                # Adverse selection detector with timing
+                # Adverse selection detector with timing (PER-COIN)
                 now_fill = time.time()
-                if consecutive_side["coin"] == coin and consecutive_side["side"] == side:
-                    consecutive_side["count"] += 1
+                coin_consec = consecutive_side_per_coin.get(coin)
+                if coin_consec and coin_consec["side"] == side:
+                    coin_consec["count"] += 1
                 else:
-                    consecutive_side.update({"coin": coin, "side": side, "count": 1, "first_time": now_fill})
-                    # Opposite-side fill clears lockout
-                    if coin in adverse_side_locked:
-                        print(f"  >>> LOCKOUT CLEARED: {coin} opposite fill")
-                        adverse_side_locked.pop(coin, None)
-                        adverse_pause_until.pop(coin, None)
-                        adverse_size_mult.pop(coin, None)
-                consec = consecutive_side["count"]
-                consec_window = now_fill - consecutive_side["first_time"]
+                    # Different side or first fill on this coin
+                    if coin_consec and coin_consec["side"] != side:
+                        # Opposite-side fill clears lockout
+                        if coin in adverse_side_locked:
+                            print(f"  >>> LOCKOUT CLEARED: {coin} opposite fill")
+                            adverse_side_locked.pop(coin, None)
+                            adverse_pause_until.pop(coin, None)
+                            adverse_size_mult.pop(coin, None)
+                    consecutive_side_per_coin[coin] = {"side": side, "count": 1, "first_time": now_fill}
+                    coin_consec = consecutive_side_per_coin[coin]
+                consec = coin_consec["count"]
+                consec_window = now_fill - coin_consec["first_time"]
                 consec_warn = ""
 
                 # Escalating adverse selection protection
@@ -1007,12 +1012,18 @@ def run_cycle(info, exchange, address):
     Scores all pairs, only quotes the top MAX_QUOTE_PAIRS.
     Cancels orders on pairs that fall out of the top rank.
     """
-    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag, request_budget_paused
+    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag, request_budget_paused, quoting_paused
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
         remaining = int(risk_cooldown_until - time.time())
         print(f"  RISK COOLDOWN: {remaining}s remaining")
+        write_status()
+        return
+
+    # Remote pause check
+    if quoting_paused:
+        print("  PAUSED (remote /pause). Send /resume to continue.")
         write_status()
         return
 
@@ -1100,7 +1111,8 @@ def run_cycle(info, exchange, address):
             # Score too low for entry, but inventory must be unwound
             exit_only_pairs.add(pair)
             quote_pairs.add(pair)
-            print(f"  {coin} | EXIT-ONLY: score {score:+.1f} < {MIN_SCORE_THRESHOLD}, allowing exit side")
+            reason = f"score {score:+.1f} < {MIN_SCORE_THRESHOLD}" if score < MIN_SCORE_THRESHOLD else f"ranked #{i+1} (max {MAX_QUOTE_PAIRS})"
+            print(f"  {coin} | EXIT-ONLY: {reason}, allowing exit side")
         else:
             skip_pairs.add(pair)
 
@@ -1279,7 +1291,9 @@ def run_cycle(info, exchange, address):
             elif pos_size < 0:
                 allow_sell = False  # short: only buy to exit
             # Extra aggressive exit: tighter spread on exit side
-            inv_extra_skew = abs(inv_ratio) * 4.0 if abs(inv_ratio) > 0.3 else 0
+            # Use max() to preserve max-hold urgency if already set
+            exit_skew = abs(inv_ratio) * 4.0 if abs(inv_ratio) > 0.3 else 0
+            inv_extra_skew = max(inv_extra_skew, exit_skew)
         else:
             # Full quoting mode — apply soft bias for inventory management
             if abs(inv_ratio) > 0.50:
@@ -1292,13 +1306,16 @@ def run_cycle(info, exchange, address):
 
         # Flow-based adverse selection protection
         # If trade flow is heavily one-sided, stop quoting the side that gets picked off
+        # BUT: never block the exit side when holding inventory
         if flow_total > 2.0:
             if flow_imb < -0.5:
-                # Selling pressure: stop buying (you'd buy right before a drop)
-                allow_buy = False
+                # Selling pressure: stop buying — UNLESS we're SHORT and need to buy to exit
+                if pos_size >= 0:
+                    allow_buy = False
             elif flow_imb > 0.5:
-                # Buying pressure: stop selling (you'd sell right before a pump)
-                allow_sell = False
+                # Buying pressure: stop selling — UNLESS we're LONG and need to sell to exit
+                if pos_size <= 0:
+                    allow_sell = False
 
         # Hard lockout: block side entirely after consecutive adverse fills
         lock = adverse_side_locked.get(coin)
@@ -1705,7 +1722,7 @@ def run_cycle(info, exchange, address):
     post_fill_checks[:] = remaining_checks
 
     # Check fills (uses REST — will be replaced by WS fills later)
-    check_fills(info, address)
+    check_fills(info, exchange, address)
 
     pv = portfolio_value()
     elapsed = time.time() - start_time
@@ -1820,7 +1837,7 @@ def main():
 
     tg_cmd.stop()
     cancel_all_orders(exchange, info, address)
-    check_fills(info, address)
+    check_fills(info, exchange, address)
     write_status()
     pv = portfolio_value()
     print(f"\nFinal Portfolio: ${pv:.2f} | Fills: {total_trade_count}")

@@ -41,7 +41,7 @@ class TelegramCommander:
         "safety_bps_aggressive":(float, "Safety margin in aggressive mode (bps)"),
         "flow_shift_bps":       (float, "Max fair value shift from flow (bps)"),
         "flow_widen_bps":       (float, "Extra spread during extreme flow (bps)"),
-        "stale_bps":            (float, "Refresh orders if price drifts > this (bps)"),
+
         "refresh_secs":         (int,   "Status refresh interval (seconds)"),
     }
 
@@ -61,7 +61,7 @@ class TelegramCommander:
         "safety_bps_aggressive":"SAFETY_BPS_AGGRESSIVE",
         "flow_shift_bps":       "FLOW_SHIFT_BPS",
         "flow_widen_bps":       "FLOW_WIDEN_BPS",
-        "stale_bps":            "STALE_BPS",
+
         "refresh_secs":         "REFRESH_SECS",
     }
 
@@ -223,12 +223,12 @@ class TelegramCommander:
             return "\n".join(lines)
 
         elif cmd == "/pause":
-            self.trader.running = False
-            return "Bot PAUSED. Orders will be cancelled. Use /resume to restart."
+            self.trader.quoting_paused = True
+            return "Quoting PAUSED. Existing orders remain. Use /resume to continue."
 
         elif cmd == "/resume":
-            self.trader.running = True
-            return "Bot RESUMED."
+            self.trader.quoting_paused = False
+            return "Quoting RESUMED."
 
         elif cmd == "/stop":
             self.trader.running = False
