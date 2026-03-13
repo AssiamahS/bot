@@ -140,6 +140,25 @@ quotes_placed = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
+# --- Request budget protection ---
+REQUEST_BUDGET_BUFFER = 200   # pause quoting when within 200 requests of estimated limit
+request_count = 0             # total API requests sent this session
+volume_traded_usd = 0.0       # total volume traded this session
+request_budget_paused = False
+
+def track_request():
+    global request_count
+    request_count += 1
+
+def track_volume(usd_amount):
+    global volume_traded_usd
+    volume_traded_usd += abs(usd_amount)
+
+def request_budget_remaining():
+    # HL allows ~2 requests per $1 traded, plus base allowance
+    allowed = 1000 + volume_traded_usd * 2.0
+    return int(allowed - request_count)
+
 # Queue-preserving quoting: two-tier drift thresholds
 QUEUE_KEEP_BPS = 8    # keep resting order if drift <= this (preserve queue position)
 REPLACE_BPS = 15      # only cancel+replace if drift exceeds this
@@ -1067,6 +1086,17 @@ def run_cycle(info, exchange, address):
                 risk_cooldown_until = time.time() + COOLDOWN_SECS
                 tg_send(f"⚠️ <b>RISK PAUSE</b> {coin}: {risk_reason}\nCooldown {COOLDOWN_SECS}s")
             continue
+
+        # --- Request budget check ---
+        budget_left = request_budget_remaining()
+        if budget_left < REQUEST_BUDGET_BUFFER:
+            if not request_budget_paused:
+                request_budget_paused = True
+                print(f"  >>> REQUEST BUDGET LOW: {budget_left} remaining. Pausing quotes.")
+            continue
+        elif request_budget_paused:
+            request_budget_paused = False
+            print(f"  >>> REQUEST BUDGET OK: {budget_left} remaining. Resuming.")
 
         # Get existing orders for this coin
         coin_orders = current_orders.get(coin, [])
