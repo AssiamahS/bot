@@ -116,6 +116,7 @@ VOL_WINDOW = 20
 # Risk governor limits (scaled for small portfolio)
 MAX_DRAWDOWN = 0.30  # raised: account already absorbed prior losses, protect from here
 MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
+MAX_POSITION_NOTIONAL = 12.0  # hard cap: total exposure across all coins cannot exceed this
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -790,7 +791,7 @@ def get_open_orders_by_coin(info, address):
 
 
 MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
-MIN_SCORE_THRESHOLD = 5.0  # strict: only quote high-confidence setups
+MIN_SCORE_THRESHOLD = 2.0  # lowered: allow quoting when edge > fees
 
 
 def check_weak_pair(coin):
@@ -1026,12 +1027,27 @@ def run_cycle(info, exchange, address):
         size = round(level_size_usd / mid, s_dec)
         if size * mid < 10.0:
             size = round(10.5 / mid, s_dec)
+        equity_pct = (size * mid) / account_value * 100 if account_value > 0 else 0
+        print(f"  SIZE: ${size * mid:.2f} ({size} {coin}) = {equity_pct:.0f}% of ${account_value:.2f} equity")
 
         # Check current position
         pos = positions.get(coin, {})
         pos_size = pos.get("size", 0)
         pos_usd = abs(pos_size) * mid
         entry_price = pos.get("entry_price", 0)
+
+        # Total exposure check: sum of all position notionals
+        total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
+                            for c, p in positions.items())
+        if total_exposure > MAX_POSITION_NOTIONAL:
+            # Only allow reduce-side quoting
+            if pos_size > 0:
+                allow_buy = False
+            elif pos_size < 0:
+                allow_sell = False
+            elif total_exposure > MAX_POSITION_NOTIONAL * 1.2:
+                print(f"  {coin} | EXPOSURE CAP: ${total_exposure:.2f} > ${MAX_POSITION_NOTIONAL}")
+                continue
 
         # Risk check
         risk_reason = risk_check(account_value, vol_bps, pos_usd)
@@ -1064,7 +1080,14 @@ def run_cycle(info, exchange, address):
                     try: exchange.cancel(coin, o["oid"])
                     except: pass
                 try:
-                    exchange.market_close(coin)
+                    # Refresh position before closing to avoid stale reduce-only errors
+                    get_account_state(info, address)
+                    fresh_pos = last_balances.get("positions", {}).get(coin, {})
+                    fresh_size = fresh_pos.get("size", 0)
+                    if fresh_size != 0:
+                        exchange.market_close(coin)
+                    else:
+                        print(f"  {coin} position already flat, skip market_close")
                 except Exception as e:
                     print(f"  Market close error: {e}")
                 live_quotes.pop(coin, None)
@@ -1185,14 +1208,24 @@ def run_cycle(info, exchange, address):
 
         if spread_ticks >= required_ticks:
             # Queue-aware pennying: step inside crowded levels, join thin ones
+            # NEVER penny when spread is too tight — causes post-only crossing
             bid_sz = price_data.get("bid_size", 0)
             ask_sz = price_data.get("ask_size", 0)
-            # Penny (step inside) if top level has a wall; join if thin
-            bid_step = 1 if bid_sz > 5 else 0  # >5 units = crowded, penny to jump
-            ask_step = 1 if ask_sz > 5 else 0
-            if spread_ticks >= required_ticks + 3:
-                bid_step = min(bid_step + 1, 2)
-                ask_step = min(ask_step + 1, 2)
+            if spread_ticks <= 2:
+                # Spread is 1-2 ticks: join best_bid/best_ask, no pennying
+                bid_step = 0
+                ask_step = 0
+            else:
+                # Penny (step inside) if top level has a wall; join if thin
+                bid_step = 1 if bid_sz > 5 else 0  # >5 units = crowded, penny to jump
+                ask_step = 1 if ask_sz > 5 else 0
+                if spread_ticks >= required_ticks + 3:
+                    bid_step = min(bid_step + 1, 2)
+                    ask_step = min(ask_step + 1, 2)
+                # Cap pennying so we never consume more than half the spread
+                max_step = max((spread_ticks - 1) // 2, 0)
+                bid_step = min(bid_step, max_step)
+                ask_step = min(ask_step, max_step)
             buy_price = round(best_bid + bid_step * tick, p_dec)
             sell_price = round(best_ask - ask_step * tick, p_dec)
             buy_reason = f"penny x{bid_step}" if bid_step > 0 else "join bid"
@@ -1226,13 +1259,22 @@ def run_cycle(info, exchange, address):
                 sell_price = flow_ceil
                 sell_reason += f" +flow{flow_shift_applied:+.0f}bp"
 
-        # Safety: never cross the spread
+        # Safety: never cross the spread — fall back to joining, not penny-minus-tick
         if buy_price >= best_ask:
-            buy_price = round(best_ask - tick, p_dec)
+            buy_price = best_bid  # join best bid, don't try to penny
         if sell_price <= best_bid:
-            sell_price = round(best_bid + tick, p_dec)
+            sell_price = best_ask  # join best ask, don't try to penny
+        # Final hard checks: bid must be strictly below best_ask, ask strictly above best_bid
+        if buy_price >= best_ask:
+            print(f"  SKIP BUY {coin}: bid ${buy_price} >= ask ${best_ask}")
+            allow_buy = False
+        if sell_price <= best_bid:
+            print(f"  SKIP SELL {coin}: ask ${sell_price} <= bid ${best_bid}")
+            allow_sell = False
         if sell_price <= buy_price:
             sell_price = round(buy_price + tick, p_dec)
+            if sell_price <= best_bid:
+                allow_sell = False
 
         # FINAL profitability check on actual quotes after all adjustments
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
