@@ -11,6 +11,8 @@ import signal
 import os
 import sys
 import threading
+import socket
+socket.setdefaulttimeout(5)  # prevent hanging on slow API calls
 import urllib.request
 import urllib.parse
 from collections import deque
