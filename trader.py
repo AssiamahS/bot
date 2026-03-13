@@ -774,10 +774,10 @@ def check_fills(info, address):
                     else:
                         trip_tracker.pop(coin, None)
                 else:
-                    # Same side fill = averaging in, update tracker
+                    # Same side fill = accumulating, keep FIRST fill price as anchor
+                    # (averaging dilutes the anchor and makes exit harder)
                     total_size = leg["size"] + size
-                    avg_price = (leg["price"] * leg["size"] + price * size) / total_size
-                    trip_tracker[coin] = {"side": side, "price": avg_price, "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
+                    trip_tracker[coin] = {"side": side, "price": leg["price"], "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
 
                 fill = {
                     "time": time.time(),
@@ -1208,7 +1208,7 @@ def run_cycle(info, exchange, address):
         flow_total = buy_vol + sell_vol
 
         # === STOP-LOSS CHECK ===
-        STOP_LOSS_BPS = 30
+        STOP_LOSS_BPS = 60  # 30 was too tight, triggered on normal volatility
         if pos_size != 0 and entry_price > 0:
             if pos_size > 0:
                 loss_bps = (entry_price - mid) / entry_price * 10000
@@ -1239,6 +1239,27 @@ def run_cycle(info, exchange, address):
                     print(f"  Market close error: {e}")
                 live_quotes.pop(coin, None)
                 continue
+
+        # === MAX HOLD TIME: escalating exit urgency ===
+        open_leg = trip_tracker.get(coin)
+        if open_leg and pos_size != 0:
+            hold_secs = time.time() - open_leg.get("time", time.time())
+            if hold_secs > 300:
+                # 5+ minutes: force market close
+                print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing")
+                for o in coin_orders:
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+                try:
+                    _api_call(exchange.market_close, coin)
+                    track_request()
+                except: pass
+                trip_tracker.pop(coin, None)
+                live_quotes.pop(coin, None)
+                continue
+            elif hold_secs > 120:
+                # 2+ minutes: widen exit side aggressively
+                inv_extra_skew = max(inv_extra_skew, 8.0)
 
         # === FLOW-AWARE QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
 
@@ -1413,11 +1434,26 @@ def run_cycle(info, exchange, address):
             live_quotes.pop(coin, None)
             continue
 
-        # Apply inventory skew + soft bias
-        total_skew = skew_bps + (inv_extra_skew * (1 if inv_ratio > 0 else -1))
-        total_skew_px = mid * total_skew / 10000.0
-        buy_price = round(buy_price - total_skew_px, p_dec)
-        sell_price = round(sell_price - total_skew_px, p_dec)
+        # Apply inventory skew ASYMMETRICALLY
+        # LONG (inv_ratio > 0): push sell DOWN (aggressive exit), push buy DOWN (less entry)
+        # SHORT (inv_ratio < 0): push buy UP (aggressive exit), push sell UP (less entry)
+        entry_skew_bps = skew_bps + inv_extra_skew * (1 if inv_ratio > 0 else -1)
+        exit_skew_bps = -abs(inv_extra_skew)  # always push exit side TOWARD mid
+        entry_skew_px = mid * entry_skew_bps / 10000.0
+        exit_skew_px = mid * exit_skew_bps / 10000.0
+        if inv_ratio > 0:
+            # LONG: buy is entry (push away), sell is exit (push toward mid = lower price)
+            buy_price = round(buy_price - entry_skew_px, p_dec)
+            sell_price = round(sell_price + exit_skew_px, p_dec)  # sell lower = closer to mid = faster exit
+        elif inv_ratio < 0:
+            # SHORT: sell is entry (push away), buy is exit (push toward mid = higher price)
+            sell_price = round(sell_price + entry_skew_px, p_dec)
+            buy_price = round(buy_price - exit_skew_px, p_dec)  # buy higher = closer to mid = faster exit
+        else:
+            # Flat: symmetric skew
+            skew_px = mid * skew_bps / 10000.0
+            buy_price = round(buy_price - skew_px, p_dec)
+            sell_price = round(sell_price - skew_px, p_dec)
 
         # Apply flow shift
         if flow_shift_applied != 0:
@@ -1448,18 +1484,29 @@ def run_cycle(info, exchange, address):
             if sell_price <= best_bid:
                 allow_sell = False
 
-        # FINAL profitability check on actual quotes after all adjustments
+        # FINAL profitability check — but NEVER gate the exit side
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
         last_profitability_diag["expected_net"] = round(expected_net, 6)
         if expected_net <= 0:
-            if coin_orders:
-                for o in coin_orders:
-                    try: exchange.cancel(coin, o["oid"])
-                    except: pass
-            quotes_skipped_profitability += 1
-            print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 after skew/flow")
-            live_quotes.pop(coin, None)
-            continue
+            if pos_size == 0:
+                # Flat: gate both sides, no inventory to unwind
+                if coin_orders:
+                    for o in coin_orders:
+                        try: exchange.cancel(coin, o["oid"])
+                        except: pass
+                quotes_skipped_profitability += 1
+                print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 (flat, skip)")
+                live_quotes.pop(coin, None)
+                continue
+            else:
+                # Have inventory: gate entry side only, always allow exit
+                quotes_skipped_profitability += 1
+                if pos_size > 0:
+                    allow_buy = False  # gate entry, allow sell exit
+                    print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0, gating BUY only (LONG inv)")
+                else:
+                    allow_sell = False  # gate entry, allow buy exit
+                    print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0, gating SELL only (SHORT inv)")
 
         quotes_placed += 1
 
