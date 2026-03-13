@@ -140,7 +140,7 @@ quotes_placed = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
-STALE_BPS = 2  # refresh orders if price moved >2bps from our quote (stay near front of queue)
+STALE_BPS = 10  # refresh orders if price moved >10bps (reduce churn for request/volume limit)
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 6.0 bps
@@ -169,7 +169,7 @@ ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
 last_quote_time = {}  # coin -> timestamp of last quote update
-MIN_QUOTE_INTERVAL = 0.25  # don't requote faster than 250ms (fast but not spammy)
+MIN_QUOTE_INTERVAL = 8.0  # throttle: reduce request churn for volume/request ratio
 
 # Trade flow tracking (updated by WS trades callback)
 recent_trades = {}  # coin -> deque of {"ts", "px", "sz", "side"}
