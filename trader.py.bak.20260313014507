@@ -24,32 +24,6 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 from tg_commander import TelegramCommander
 
-# === SINGLETON LOCK: prevent multiple instances ===
-import fcntl
-_lock_file = open("/tmp/trader.lock", "w")
-try:
-    fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    _lock_file.write(str(os.getpid()))
-    _lock_file.flush()
-except IOError:
-    print("ERROR: Another trader instance is already running. Exiting.")
-    sys.exit(1)
-
-def _api_call(fn, *args, **kwargs):
-    """Wrap REST API calls with retry on 429."""
-    for attempt in range(3):
-        try:
-            result = fn(*args, **kwargs)
-            return result
-        except Exception as e:
-            if '429' in str(e):
-                wait = (attempt + 1) * 2
-                print(f"  429 rate limit, backing off {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-    return None
-
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
 
@@ -142,9 +116,9 @@ price_history = {COIN_MAP.get(p, p.replace("-PERP", "")): [] for p in PAIRS}
 VOL_WINDOW = 20
 
 # Risk governor limits (scaled for small portfolio)
-MAX_DRAWDOWN = 0.50  # raised: account already absorbed prior losses, protect from here
+MAX_DRAWDOWN = 0.30  # raised: account already absorbed prior losses, protect from here
 MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
-MAX_POSITION_NOTIONAL = 25.0  # hard cap: total exposure across all coins cannot exceed this
+MAX_POSITION_NOTIONAL = 12.0  # hard cap: total exposure across all coins cannot exceed this
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -157,13 +131,10 @@ round_trips = 0  # completed buy+sell cycles
 trip_tracker = {}  # coin -> {"side": "buy"/"sell", "price": float, "size": float, "fee": float, "time": float}
 completed_trips = []  # list of {"coin", "buy_px", "sell_px", "size", "gross", "fees", "net", "duration"}
 fill_edges = []  # edge in bps per fill, for realized spread tracking
-post_fill_checks = []  # list of {"coin", "side", "price", "check_at"} for delayed edge tracking
-consecutive_side_per_coin = {}  # coin -> {"side": str, "count": int, "first_time": float}
+consecutive_side = {"coin": "", "side": "", "count": 0, "first_time": 0}  # adverse selection detector
 adverse_pause_until = {}  # coin -> timestamp, pause vulnerable side after consecutive fills
 strategy_pause_until = 0  # global pause when avg trip net is negative
-quoting_paused = False  # remote pause via Telegram /pause command
 adverse_size_mult = {}  # coin -> size multiplier after adverse detection
-adverse_side_locked = {}  # coin -> {"side": "B"/"A", "until": timestamp} - hard lockout after 5+ consecutive fills
 # Gating counters
 quote_attempts = 0
 quotes_skipped_profitability = 0
@@ -365,18 +336,10 @@ def get_ws_book(coin):
         return None
     best_bid = bids[0]["px"]
     best_ask = asks[0]["px"]
-    bid_vol = bids[0]["sz"]
-    ask_vol = asks[0]["sz"]
-    # Microprice: volume-weighted mid biased toward side with more pressure
-    if bid_vol + ask_vol > 0:
-        microprice = (best_bid * ask_vol + best_ask * bid_vol) / (bid_vol + ask_vol)
-    else:
-        microprice = (best_bid + best_ask) / 2
     return {
         "best_bid": best_bid,
         "best_ask": best_ask,
         "mid": (best_bid + best_ask) / 2,
-        "microprice": microprice,
         "spread": best_ask - best_bid,
         "bid_size": bids[0]["sz"],
         "ask_size": asks[0]["sz"],
@@ -496,12 +459,10 @@ def risk_check(equity, vol_bps, inventory_usd):
     """Risk governor: returns reason string if trading should pause, else None.
     Inventory is handled by side-gating, not cooldown — only pause on drawdown/volatility.
     """
-    if initial_portfolio_value and initial_portfolio_value > 0 and equity > 0:
+    if initial_portfolio_value and initial_portfolio_value > 0:
         drawdown = (initial_portfolio_value - equity) / initial_portfolio_value
         if drawdown > MAX_DRAWDOWN:
-            # Only trigger if equity is a reasonable number (not a 429 partial read)
-            if equity > 5.0:  # sanity: ignore obviously wrong equity values
-                return f"drawdown {drawdown*100:.1f}%"
+            return f"drawdown {drawdown*100:.1f}%"
     if vol_bps > MAX_VOLATILITY_BPS:
         return f"volatility {vol_bps:.0f}bps"
     return None
@@ -568,16 +529,15 @@ def get_account_state(info, address):
             return state
     except Exception as e:
         print(f"  Account state error: {e}")
-        # Only clear positions on non-transient errors (429 = keep existing data)
-        if '429' not in str(e) and 'rate' not in str(e).lower():
-            last_balances["positions"] = {}
+        # On failure, clear stale positions to avoid phantom inventory penalties
+        last_balances["positions"] = {}
     return None
 
 
 def cancel_all_orders(exchange, info, address):
     """Cancel all open orders."""
     try:
-        open_orders = _api_call(info.open_orders, address) or []
+        open_orders = info.open_orders(address)
         if open_orders:
             for order in open_orders:
                 coin = order.get("coin", "")
@@ -613,7 +573,6 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
         statuses = data.get("statuses", []) if isinstance(data, dict) else []
         if statuses and isinstance(statuses[0], dict) and "resting" in statuses[0]:
             oid = statuses[0]["resting"]["oid"]
-            track_request()
             side = "BUY" if is_buy else "SELL"
             print(f"  {side:4s} {size} {coin} @ ${price} -> {oid}")
             active_orders.append({
@@ -631,11 +590,11 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
     return None
 
 
-def check_fills(info, exchange, address):
+def check_fills(info, address):
     """Check for recent fills and track round-trip profitability."""
     global total_trade_count, round_trips, strategy_pause_until
     try:
-        fills = _api_call(info.user_fills, address) or []
+        fills = info.user_fills(address)
         new_fills = [f for f in fills if float(f.get("time", 0)) / 1000 > start_time]
         new_count = len(new_fills)
 
@@ -659,77 +618,36 @@ def check_fills(info, exchange, address):
                 edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
 
                 fill_edges.append(edge_bps)
-                # Schedule post-fill edge check in 3 seconds (PFASR)
-                post_fill_checks.append({"coin": coin, "side": side, "price": price, "check_at": time.time() + 3.0})
 
-                # Adverse selection detector with timing (PER-COIN)
+                # Adverse selection detector with timing
                 now_fill = time.time()
-                coin_consec = consecutive_side_per_coin.get(coin)
-                if coin_consec and coin_consec["side"] == side:
-                    coin_consec["count"] += 1
+                if consecutive_side["coin"] == coin and consecutive_side["side"] == side:
+                    consecutive_side["count"] += 1
                 else:
-                    # Different side or first fill on this coin
-                    if coin_consec and coin_consec["side"] != side:
-                        # Opposite-side fill clears lockout
-                        if coin in adverse_side_locked:
-                            print(f"  >>> LOCKOUT CLEARED: {coin} opposite fill")
-                            adverse_side_locked.pop(coin, None)
-                            adverse_pause_until.pop(coin, None)
-                            adverse_size_mult.pop(coin, None)
-                    consecutive_side_per_coin[coin] = {"side": side, "count": 1, "first_time": now_fill}
-                    coin_consec = consecutive_side_per_coin[coin]
-                consec = coin_consec["count"]
-                consec_window = now_fill - coin_consec["first_time"]
+                    consecutive_side.update({"coin": coin, "side": side, "count": 1, "first_time": now_fill})
+                consec = consecutive_side["count"]
+                consec_window = now_fill - consecutive_side["first_time"]
                 consec_warn = ""
 
-                # Escalating adverse selection protection
-                if consec >= 5:
-                    consec_warn = f" ⚠️{consec}x{side} LOCKED"
-                    adverse_pause_until[coin] = now_fill + 60.0
-                    adverse_size_mult[coin] = 0.5
-                    # Hard lockout: stop quoting this side entirely
-                    adverse_side_locked[coin] = {"side": side, "until": now_fill + 120.0}
-                    # Cancel ALL resting orders for this coin immediately
-                    # (pre-lockout orders can still fill if only cancelled by side)
-                    try:
-                        _ords = _api_call(info.open_orders, address) or []
-                        _cancelled = 0
-                        for _o in _ords:
-                            if _o.get('coin') == coin:
-                                try:
-                                    exchange.cancel(coin, _o['oid'])
-                                    _cancelled += 1
-                                except: pass
-                        if _cancelled:
-                            print(f'  >>> LOCKOUT: cancelled ALL {_cancelled} {coin} resting orders')
-                        live_quotes.pop(coin, None)
-                    except Exception:
-                        pass
-                    tg_send(f"🔒 <b>SIDE LOCKED</b> {coin}: {consec}x{side} - blocking for 120s")
+                # 3+ same-side fills within 10s = adverse selection
+                if consec >= 3 and consec_window < 10.0:
+                    consec_warn = f" ⚠️{consec}x{side} in {consec_window:.0f}s"
+                    # Pause the vulnerable side for 3 seconds
+                    adverse_pause_until[coin] = now_fill + 3.0
+                    adverse_size_mult[coin] = 0.5  # halve size
                 elif consec >= 3:
-                    consec_warn = f" ⚠️{consec}x{side} PAUSED"
-                    adverse_pause_until[coin] = now_fill + 30.0
-                    adverse_size_mult[coin] = 0.5
-                    # Cancel resting orders on the adverse side to stop bleeding
-                    try:
-                        _ords = _api_call(info.open_orders, address) or []
-                        for _o in _ords:
-                            if _o.get('coin') == coin and _o.get('side') == side:
-                                try: exchange.cancel(coin, _o['oid'])
-                                except: pass
-                    except: pass
+                    consec_warn = f" ⚠️{consec}x{side}"
 
                 print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps{consec_warn}")
                 emoji = "🟢" if side == "B" else "🔴"
                 rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
                 tg_msg = f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | Edge: {edge_bps:+.1f}bps"
-                if consec >= 5:
-                    tg_msg += f"\n🔒 LOCKED: {consec}x{side} - side blocked 120s"
-                elif consec >= 3:
-                    tg_msg += f"\n⚠️ ADVERSE: {consec}x{side} - paused 30s"
+                if consec >= 3 and consec_window < 10.0:
+                    tg_msg += f"\n⚠️ ADVERSE: {consec}x{side} in {consec_window:.0f}s — pausing + halving size"
                 tg_send(tg_msg)
 
                 # Strategy pause: if last 20 trips avg net < 0, pause 60s
+                global strategy_pause_until
                 if len(completed_trips) >= 20:
                     recent_20 = completed_trips[-20:]
                     avg_recent = sum(t["net"] for t in recent_20) / 20
@@ -779,10 +697,10 @@ def check_fills(info, exchange, address):
                     else:
                         trip_tracker.pop(coin, None)
                 else:
-                    # Same side fill = accumulating, keep FIRST fill price as anchor
-                    # (averaging dilutes the anchor and makes exit harder)
+                    # Same side fill = averaging in, update tracker
                     total_size = leg["size"] + size
-                    trip_tracker[coin] = {"side": side, "price": leg["price"], "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
+                    avg_price = (leg["price"] * leg["size"] + price * size) / total_size
+                    trip_tracker[coin] = {"side": side, "price": avg_price, "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
 
                 fill = {
                     "time": time.time(),
@@ -795,7 +713,6 @@ def check_fills(info, exchange, address):
                     "closed_pnl": closed_pnl,
                 }
                 all_fills.append(fill)
-                track_volume(cost)  # track for request budget calculation
 
                 for p in PAIRS:
                     if coin in p:
@@ -904,7 +821,7 @@ def get_open_orders_by_coin(info, address):
     """Get open orders grouped by coin."""
     result = {}
     try:
-        orders = _api_call(info.open_orders, address) or []
+        orders = info.open_orders(address)
         for o in orders:
             coin = o.get("coin", "")
             if coin not in result:
@@ -916,7 +833,7 @@ def get_open_orders_by_coin(info, address):
 
 
 MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
-MIN_SCORE_THRESHOLD = -2.0  # allow exit-only pairs with moderate negative score
+MIN_SCORE_THRESHOLD = 2.0  # lowered: allow quoting when edge > fees
 
 
 def check_weak_pair(coin):
@@ -954,8 +871,9 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     mid = price_data["mid"]
     mkt_spread_bps = price_data["spread"] / mid * 10000 if mid > 0 else 0
 
-    # Soft penalty for tight spreads (profitability gate handles the hard filter)
-    # No hard -100 here — let exit-only mode work even on tight pairs
+    # Hard filter: spread must be >= MIN_SPREAD_BPS
+    if mkt_spread_bps < MIN_SPREAD_BPS:
+        return -100, {"spread": round(mkt_spread_bps, 1), "fee": 0, "vol": 0, "flow": 0, "crowd": 0, "inv": 0, "hold": 0, "score": -100}
 
     # Fee penalty: 2x maker fee (both legs)
     fee_penalty = 2 * MAKER_FEE_BPS
@@ -987,7 +905,7 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     hold_penalty = 0.0
     if open_leg:
         hold_secs = time.time() - open_leg.get("time", time.time())
-        hold_penalty = min(hold_secs / 60.0 * 1.0, 3.0)  # 1bps per minute held, cap 3
+        hold_penalty = min(hold_secs / 60.0 * 2.0, 10.0)  # 2bps per minute held, cap 10
 
     score = mkt_spread_bps - fee_penalty - vol_penalty - flow_penalty - crowd_penalty - inv_penalty - hold_penalty
 
@@ -1013,7 +931,7 @@ def run_cycle(info, exchange, address):
     Scores all pairs, only quotes the top MAX_QUOTE_PAIRS.
     Cancels orders on pairs that fall out of the top rank.
     """
-    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag, request_budget_paused, quoting_paused
+    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
@@ -1022,17 +940,9 @@ def run_cycle(info, exchange, address):
         write_status()
         return
 
-    # Remote pause check
-    if quoting_paused:
-        print("  PAUSED (remote /pause). Send /resume to continue.")
-        write_status()
-        return
-
-    # Use cached account state (refreshed every 30s in main loop)
+    # Get account state and check open orders
+    get_account_state(info, address)
     account_value = portfolio_value()
-    if account_value <= 0:
-        get_account_state(info, address)
-        account_value = portfolio_value()
     current_orders = get_open_orders_by_coin(info, address)
     active_orders = []  # rebuild for dashboard
     positions = last_balances.get("positions", {})
@@ -1053,9 +963,7 @@ def run_cycle(info, exchange, address):
             # Cancel any resting orders on suspended pairs
             coin_orders = current_orders.get(coin, [])
             for o in coin_orders:
-                try:
-                    exchange.cancel(coin, o["oid"])
-                    track_request()
+                try: exchange.cancel(coin, o["oid"])
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1103,17 +1011,9 @@ def run_cycle(info, exchange, address):
     # Must be in top MAX_QUOTE_PAIRS AND score above threshold
     quote_pairs = set()
     skip_pairs = set()
-    exit_only_pairs = set()  # pairs where only exit side is allowed
     for i, (pair, coin, score, _) in enumerate(pair_scores):
-        has_inventory = coin in positions and positions[coin].get("size", 0) != 0
         if i < MAX_QUOTE_PAIRS and score >= MIN_SCORE_THRESHOLD:
             quote_pairs.add(pair)
-        elif has_inventory:
-            # Score too low for entry, but inventory must be unwound
-            exit_only_pairs.add(pair)
-            quote_pairs.add(pair)
-            reason = f"score {score:+.1f} < {MIN_SCORE_THRESHOLD}" if score < MIN_SCORE_THRESHOLD else f"ranked #{i+1} (max {MAX_QUOTE_PAIRS})"
-            print(f"  {coin} | EXIT-ONLY: {reason}, allowing exit side")
         else:
             skip_pairs.add(pair)
 
@@ -1147,7 +1047,6 @@ def run_cycle(info, exchange, address):
         vol_bps = cached["vol_bps"]
 
         mid = price_data["mid"]
-        microprice = price_data.get("microprice", mid)
         best_bid = price_data["best_bid"]
         best_ask = price_data["best_ask"]
         bid_top_size = price_data["bid_size"]
@@ -1179,6 +1078,19 @@ def run_cycle(info, exchange, address):
         pos_usd = abs(pos_size) * mid
         entry_price = pos.get("entry_price", 0)
 
+        # Total exposure check: sum of all position notionals
+        total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
+                            for c, p in positions.items())
+        if total_exposure > MAX_POSITION_NOTIONAL:
+            # Only allow reduce-side quoting
+            if pos_size > 0:
+                allow_buy = False
+            elif pos_size < 0:
+                allow_sell = False
+            elif total_exposure > MAX_POSITION_NOTIONAL * 1.2:
+                print(f"  {coin} | EXPOSURE CAP: ${total_exposure:.2f} > ${MAX_POSITION_NOTIONAL}")
+                continue
+
         # Risk check
         risk_reason = risk_check(account_value, vol_bps, pos_usd)
         if risk_reason:
@@ -1207,7 +1119,7 @@ def run_cycle(info, exchange, address):
         flow_total = buy_vol + sell_vol
 
         # === STOP-LOSS CHECK ===
-        STOP_LOSS_BPS = 60  # 30 was too tight, triggered on normal volatility
+        STOP_LOSS_BPS = 30
         if pos_size != 0 and entry_price > 0:
             if pos_size > 0:
                 loss_bps = (entry_price - mid) / entry_price * 10000
@@ -1226,12 +1138,7 @@ def run_cycle(info, exchange, address):
                     fresh_pos = last_balances.get("positions", {}).get(coin, {})
                     fresh_size = fresh_pos.get("size", 0)
                     if fresh_size != 0:
-                        result = _api_call(exchange.market_close, coin)
-                        track_request()
-                        if result:
-                            print(f"  {coin} market close sent")
-                        else:
-                            print(f"  {coin} market close failed (429), will retry next cycle")
+                        exchange.market_close(coin)
                     else:
                         print(f"  {coin} position already flat, skip market_close")
                 except Exception as e:
@@ -1246,100 +1153,39 @@ def run_cycle(info, exchange, address):
         if MAX_INVENTORY_USD > 0:
             inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
 
-        # Entry/Exit split: exits always allowed, entries gated by score
-        is_exit_only = pair in exit_only_pairs
+        # Side gating — reduce-only when inventory is heavy
+        REDUCE_ONLY_THRESHOLD = 0.60
+        HARD_STOP_THRESHOLD = 0.85
+
         allow_buy = True
         allow_sell = True
-        inv_extra_skew = 0.0
 
-        # Total exposure check: cap total notional across all coins
-        total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
-                            for c, p in positions.items())
-        if total_exposure > MAX_POSITION_NOTIONAL:
-            if pos_size > 0:
-                allow_buy = False  # only allow sell to reduce
-            elif pos_size < 0:
-                allow_sell = False  # only allow buy to reduce
-            elif total_exposure > MAX_POSITION_NOTIONAL * 1.2:
-                print(f"  {coin} | EXPOSURE CAP: ${total_exposure:.2f} > ${MAX_POSITION_NOTIONAL}")
-                continue
+        if inv_ratio >= REDUCE_ONLY_THRESHOLD:
+            allow_buy = False
+        if inv_ratio <= -REDUCE_ONLY_THRESHOLD:
+            allow_sell = False
+        if inv_ratio >= HARD_STOP_THRESHOLD:
+            allow_buy = False
+            allow_sell = True
+        if inv_ratio <= -HARD_STOP_THRESHOLD:
+            allow_buy = True
+            allow_sell = False
 
-        # === MAX HOLD TIME: escalating exit urgency ===
-        open_leg = trip_tracker.get(coin)
-        if open_leg and pos_size != 0:
-            hold_secs = time.time() - open_leg.get("time", time.time())
-            if hold_secs > 300:
-                # 5+ minutes: force market close
-                print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing")
-                for o in coin_orders:
-                    try: exchange.cancel(coin, o["oid"])
-                    except: pass
-                try:
-                    _api_call(exchange.market_close, coin)
-                    track_request()
-                except: pass
-                trip_tracker.pop(coin, None)
-                live_quotes.pop(coin, None)
-                continue
-            elif hold_secs > 120:
-                # 2+ minutes: widen exit side aggressively
-                inv_extra_skew = max(inv_extra_skew, 8.0)
-
-        if is_exit_only:
-            # Score below threshold — only allow the exit side
-            if pos_size > 0:
-                allow_buy = False   # long: only sell to exit
-            elif pos_size < 0:
-                allow_sell = False  # short: only buy to exit
-            # Extra aggressive exit: tighter spread on exit side
-            # Use max() to preserve max-hold urgency if already set
-            exit_skew = abs(inv_ratio) * 4.0 if abs(inv_ratio) > 0.3 else 0
-            inv_extra_skew = max(inv_extra_skew, exit_skew)
-        else:
-            # Full quoting mode — apply soft bias for inventory management
-            # Use max() to preserve max-hold urgency if already set
-            if abs(inv_ratio) > 0.50:
-                inv_extra_skew = max(inv_extra_skew, abs(inv_ratio) * 8.0)
-            if abs(inv_ratio) > 0.85:
-                inv_extra_skew = max(inv_extra_skew, abs(inv_ratio) * 14.0)
-                spread_bps += 4
-            if abs(inv_ratio) > 1.1:
-                spread_bps += 6
+        # Extreme inventory: force flatten aggressively instead of freezing
+        if abs(inv_ratio) > 1.1:
+            allow_buy = True
+            allow_sell = True
+            spread_bps += 6
 
         # Flow-based adverse selection protection
         # If trade flow is heavily one-sided, stop quoting the side that gets picked off
-        # BUT: never block the exit side when holding inventory
-        if flow_total > 2.0:
-            if flow_imb < -0.5:
-                # Selling pressure: stop buying — UNLESS we're SHORT and need to buy to exit
-                if pos_size >= 0:
-                    allow_buy = False
-            elif flow_imb > 0.5:
-                # Buying pressure: stop selling — UNLESS we're LONG and need to sell to exit
-                if pos_size <= 0:
-                    allow_sell = False
-
-        # Hard lockout: block side entirely after consecutive adverse fills
-        lock = adverse_side_locked.get(coin)
-        if lock:
-            if time.time() < lock["until"]:
-                remaining_lock = int(lock["until"] - time.time())
-                locked_side = lock["side"]
-                # Lockout exemption: if we're LONG and SELL is locked, allow sell to exit
-                if locked_side == "B":
-                    if pos_size < 0:
-                        pass  # exempt: need to buy to exit short
-                    else:
-                        allow_buy = False
-                        print(f"  {coin} | BUY LOCKED ({remaining_lock}s)")
-                else:
-                    if pos_size > 0:
-                        pass  # exempt: need to sell to exit long
-                    else:
-                        allow_sell = False
-                        print(f"  {coin} | SELL LOCKED ({remaining_lock}s)")
-            else:
-                adverse_side_locked.pop(coin, None)
+        if flow_total > 5.0:
+            if flow_imb < -0.7:
+                # Heavy selling: stop buying (you'd buy right before a drop)
+                allow_buy = False
+            elif flow_imb > 0.7:
+                # Heavy buying: stop selling (you'd sell right before a pump)
+                allow_sell = False
 
         # Defensive spread widening when inventory is heavy
         if abs(inv_ratio) > 0.50:
@@ -1348,8 +1194,9 @@ def run_cycle(info, exchange, address):
             spread_bps += 4
         target_spread = mid * spread_bps / 10000
 
-        # Use microprice as fair value base (volume-weighted, more accurate than raw mid)
-        fair_mid = microprice
+        # Shift fair value based on trade flow
+        # Buyers lifting asks -> raise fair value, sellers hitting bids -> lower
+        fair_mid = mid
         flow_shift_applied = 0
         if abs(flow_imb) > 0.3 and flow_total > 1.0:
             # Scale shift: 0.3-1.0 imbalance -> 0 to FLOW_SHIFT_BPS
@@ -1373,7 +1220,7 @@ def run_cycle(info, exchange, address):
         target_spread = fair_mid * spread_bps / 10000
 
         # Stronger inventory skew: push quotes harder toward flattening
-        INVENTORY_SKEW_BPS = 6.0  # reduced: 12 was too aggressive
+        INVENTORY_SKEW_BPS = 12.0
         skew_bps = inv_ratio * INVENTORY_SKEW_BPS
         skew_px = mid * skew_bps / 10000.0
 
@@ -1385,9 +1232,7 @@ def run_cycle(info, exchange, address):
             print(f"  STRATEGY PAUSE: {remaining}s (avg trip net negative)")
             # Cancel all orders while paused
             for o in coin_orders:
-                try:
-                    exchange.cancel(coin, o["oid"])
-                    track_request()
+                try: exchange.cancel(coin, o["oid"])
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1438,28 +1283,8 @@ def run_cycle(info, exchange, address):
             sell_price = round(best_ask - ask_step * tick, p_dec)
             buy_reason = f"penny x{bid_step}" if bid_step > 0 else "join bid"
             sell_reason = f"penny x{ask_step}" if ask_step > 0 else "join ask"
-        elif pos_size != 0:
-            # Spread too tight BUT we have inventory — allow exit side only
-            # Step inside spread aggressively for the exit side
-            quotes_skipped_profitability += 1
-            if pos_size > 0:
-                # LONG: need to sell to exit — penny the ask aggressively
-                allow_buy = False
-                buy_price = best_bid  # placeholder, won't be used
-                sell_price = round(best_ask - tick, p_dec)  # step inside ask
-                buy_reason = "gated"
-                sell_reason = "exit-penny"
-                print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, sell-only exit")
-            else:
-                # SHORT: need to buy to exit — penny the bid aggressively
-                allow_sell = False
-                sell_price = best_ask  # placeholder, won't be used
-                buy_price = round(best_bid + tick, p_dec)  # step inside bid
-                buy_reason = "exit-penny"
-                sell_reason = "gated"
-                print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, buy-only exit")
         else:
-            # Spread too tight, no inventory — gate both sides
+            # Spread too tight for profitability — gate it
             expected_net_tight = mkt_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
             last_profitability_diag["expected_net"] = round(expected_net_tight, 6)
             if coin_orders:
@@ -1471,36 +1296,9 @@ def run_cycle(info, exchange, address):
             live_quotes.pop(coin, None)
             continue
 
-        # Apply inventory skew ASYMMETRICALLY
-        # LONG (inv_ratio > 0): push sell DOWN (aggressive exit), push buy DOWN (less entry)
-        # SHORT (inv_ratio < 0): push buy UP (aggressive exit), push sell UP (less entry)
-        # SKIP skew on tight-spread exit path — exit penny pricing is already aggressive
-        is_tight_exit = (buy_reason == "exit-penny" or sell_reason == "exit-penny")
-        if is_tight_exit:
-            # Tight-spread exit: don't apply skew, keep aggressive penny pricing
-            capped_extra = 0
-        else:
-            # Cap skew so it never exceeds half the current spread (prevents inversion)
-            half_spread_bps = mkt_spread_bps / 2
-            max_skew_bps = max(half_spread_bps - 1.0, 2.0)  # leave at least 1bps margin
-            capped_extra = min(inv_extra_skew, max_skew_bps)
-            entry_skew_bps = skew_bps + capped_extra * (1 if inv_ratio > 0 else -1)
-            exit_skew_bps = -min(abs(capped_extra), max_skew_bps)  # push exit toward mid, capped
-            entry_skew_px = mid * entry_skew_bps / 10000.0
-            exit_skew_px = mid * exit_skew_bps / 10000.0
-            if inv_ratio > 0:
-                # LONG: buy is entry (push away), sell is exit (push toward mid = lower price)
-                buy_price = round(buy_price - entry_skew_px, p_dec)
-                sell_price = round(sell_price + exit_skew_px, p_dec)  # sell lower = closer to mid = faster exit
-            elif inv_ratio < 0:
-                # SHORT: sell is entry (push away), buy is exit (push toward mid = higher price)
-                sell_price = round(sell_price + entry_skew_px, p_dec)
-                buy_price = round(buy_price - exit_skew_px, p_dec)  # buy higher = closer to mid = faster exit
-            else:
-                # Flat: symmetric skew
-                skew_px = mid * skew_bps / 10000.0
-                buy_price = round(buy_price - skew_px, p_dec)
-                sell_price = round(sell_price - skew_px, p_dec)
+        # Apply inventory skew
+        buy_price = round(buy_price - skew_px, p_dec)
+        sell_price = round(sell_price - skew_px, p_dec)
 
         # Apply flow shift
         if flow_shift_applied != 0:
@@ -1531,29 +1329,18 @@ def run_cycle(info, exchange, address):
             if sell_price <= best_bid:
                 allow_sell = False
 
-        # FINAL profitability check — but NEVER gate the exit side
+        # FINAL profitability check on actual quotes after all adjustments
         expected_net = (sell_price - buy_price) * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
         last_profitability_diag["expected_net"] = round(expected_net, 6)
         if expected_net <= 0:
-            if pos_size == 0:
-                # Flat: gate both sides, no inventory to unwind
-                if coin_orders:
-                    for o in coin_orders:
-                        try: exchange.cancel(coin, o["oid"])
-                        except: pass
-                quotes_skipped_profitability += 1
-                print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 (flat, skip)")
-                live_quotes.pop(coin, None)
-                continue
-            else:
-                # Have inventory: gate entry side only, always allow exit
-                quotes_skipped_profitability += 1
-                if pos_size > 0:
-                    allow_buy = False  # gate entry, allow sell exit
-                    print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0, gating BUY only (LONG inv)")
-                else:
-                    allow_sell = False  # gate entry, allow buy exit
-                    print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0, gating SELL only (SHORT inv)")
+            if coin_orders:
+                for o in coin_orders:
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+            quotes_skipped_profitability += 1
+            print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 after skew/flow")
+            live_quotes.pop(coin, None)
+            continue
 
         quotes_placed += 1
 
@@ -1691,8 +1478,7 @@ def run_cycle(info, exchange, address):
             gate_str += " [NO BUY]"
         if not allow_sell:
             gate_str += " [NO SELL]"
-        skew_display = f"{skew_bps:+.1f}bps" + (f" +extra:{capped_extra:.1f}" if capped_extra > 0 else "")
-        print(f"  Spread: ${our_spread:.{p_dec}f} ({our_spread_bps:.1f}bps) | Gate: mkt={market_ticks}t req={required_ticks}t ({required_bps:.1f}bps) | ExpNet/trip: ${expected_net:.4f} | Skew: {skew_display}{gate_str}")
+        print(f"  Spread: ${our_spread:.{p_dec}f} ({our_spread_bps:.1f}bps) | Gate: mkt={market_ticks}t req={required_ticks}t ({required_bps:.1f}bps) | ExpNet/trip: ${expected_net:.4f} | Skew: {skew_bps:+.1f}bps{gate_str}")
 
         # Print position status
         if pos_size != 0:
@@ -1712,26 +1498,11 @@ def run_cycle(info, exchange, address):
                 "id": str(o.get("oid", "")),
             })
 
-    # Process post-fill edge checks (PFASR: delayed adverse selection detection)
-    now_pf = time.time()
-    remaining_checks = []
-    for pfc in post_fill_checks:
-        if now_pf >= pfc["check_at"]:
-            pfb = get_ws_book(pfc["coin"])
-            if pfb:
-                pf_mid = pfb["mid"]
-                if pfc["side"] == "B":
-                    pf_edge = (pf_mid - pfc["price"]) / pf_mid * 10000
-                else:
-                    pf_edge = (pfc["price"] - pf_mid) / pf_mid * 10000
-                marker = "OK" if pf_edge > 0 else "ADVERSE"
-                print(f"  POST-FILL [{pfc['coin']}]: {pf_edge:+.1f}bps after 3s ({marker})")
-        else:
-            remaining_checks.append(pfc)
-    post_fill_checks[:] = remaining_checks
+    # Check fills
+    check_fills(info, address)
 
-    # Check fills (uses REST — will be replaced by WS fills later)
-    check_fills(info, exchange, address)
+    # Refresh state
+    get_account_state(info, address)
 
     pv = portfolio_value()
     elapsed = time.time() - start_time
@@ -1801,20 +1572,16 @@ def main():
                 break
             book_changed.clear()
 
-            # Throttle: don't run cycle if all coins were quoted recently
+            # Throttle: don't requote faster than MIN_QUOTE_INTERVAL
             now = time.time()
-            all_recent = True
-            quote_interval = get_quote_interval()
             for coin in [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]:
                 last_t = last_quote_time.get(coin, 0)
-                if now - last_t >= quote_interval:
-                    all_recent = False
-                    break
-            if all_recent:
-                continue  # skip this cycle, all coins quoted recently
+                quote_interval = get_quote_interval()
+                if now - last_t < quote_interval:
+                    continue  # too soon for this coin
 
-            # Refresh account state periodically (every 30s to save API calls)
-            if now - last_account_refresh > 30:
+            # Refresh account state periodically (every 10s, not every cycle)
+            if now - last_account_refresh > 10:
                 get_account_state(info, address)
                 last_account_refresh = now
 
@@ -1846,7 +1613,7 @@ def main():
 
     tg_cmd.stop()
     cancel_all_orders(exchange, info, address)
-    check_fills(info, exchange, address)
+    check_fills(info, address)
     write_status()
     pv = portfolio_value()
     print(f"\nFinal Portfolio: ${pv:.2f} | Fills: {total_trade_count}")
