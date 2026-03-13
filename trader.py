@@ -1252,8 +1252,10 @@ def run_cycle(info, exchange, address):
         allow_sell = True
         inv_extra_skew = 0.0
 
-        # Per-coin inventory cap: block entry side when over MAX_INVENTORY_USD
-        if pos_usd > MAX_INVENTORY_USD:
+        # Per-coin inventory cap: block entry side when over limits
+        max_inv_equity = account_value * 0.20  # 20% of equity per coin
+        effective_inv_cap = min(MAX_INVENTORY_USD, max_inv_equity)
+        if pos_usd > effective_inv_cap:
             if pos_size > 0:
                 allow_buy = False  # LONG over cap: block more buying
             elif pos_size < 0:
@@ -1273,8 +1275,34 @@ def run_cycle(info, exchange, address):
 
         # === MAX HOLD TIME: escalating exit urgency ===
         open_leg = trip_tracker.get(coin)
+        # Seed trip_tracker for pre-existing positions (e.g. from before restart)
+        if pos_size != 0 and open_leg is None:
+            trip_tracker[coin] = {
+                "side": "B" if pos_size > 0 else "A",
+                "price": entry_price,
+                "size": abs(pos_size),
+                "fee": 0,
+                "time": time.time(),  # start counting from NOW
+            }
+            open_leg = trip_tracker[coin]
+            print(f"  {coin} | SEEDED trip_tracker for pre-existing {'LONG' if pos_size > 0 else 'SHORT'} {abs(pos_size)}")
         if open_leg and pos_size != 0:
             hold_secs = time.time() - open_leg.get("time", time.time())
+            overweight_ratio = pos_usd / max(effective_inv_cap, 0.01)
+
+            # Overweight force close: if inventory is 4x+ over cap, force close immediately
+            if overweight_ratio > 4.0:
+                print(f"  {coin} | OVERWEIGHT FORCE CLOSE: ${pos_usd:.2f} = {overweight_ratio:.1f}x cap")
+                for o in coin_orders:
+                    try: exchange.cancel(coin, o["oid"])
+                    except: pass
+                try:
+                    _api_call(exchange.market_close, coin)
+                    track_request()
+                except: pass
+                live_quotes.pop(coin, None)
+                continue
+
             if hold_secs > 300:
                 # 5+ minutes: force market close
                 print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing")
@@ -1288,8 +1316,8 @@ def run_cycle(info, exchange, address):
                 # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
                 continue
-            elif hold_secs > 120:
-                # 2+ minutes: widen exit side aggressively
+            elif hold_secs > 120 or overweight_ratio > 2.0:
+                # 2+ minutes OR 2x+ over cap: max exit urgency
                 inv_extra_skew = max(inv_extra_skew, 8.0)
 
         if is_exit_only:
