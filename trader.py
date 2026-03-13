@@ -1447,6 +1447,7 @@ def run_cycle(info, exchange, address):
     print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {round_trips}{trip_stats} | {elapsed/60:.1f}m")
     print(f"  Vol: ${total_vol:.0f} | Turnover: {turnover:.1f}x ({turnover_hr:.1f}x/hr){edge_stats}")
     print(f"  Gate [{PROFITABILITY_MODE}]: {quotes_placed}/{quote_attempts} placed ({gate_pct:.0f}% skipped) | InvMean: ${inv_mean:.1f} InvVar: {inv_var:.0f}")
+    print(f"  Budget: {request_budget_remaining()} left (reqs:{request_count} vol:${volume_traded_usd:.0f})")
     print(f"{'='*55}")
     write_status()
 
