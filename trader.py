@@ -1202,8 +1202,12 @@ def run_cycle(info, exchange, address):
                     fresh_pos = last_balances.get("positions", {}).get(coin, {})
                     fresh_size = fresh_pos.get("size", 0)
                     if fresh_size != 0:
-                        exchange.market_close(coin)
+                        result = _api_call(exchange.market_close, coin)
                         track_request()
+                        if result:
+                            print(f"  {coin} market close sent")
+                        else:
+                            print(f"  {coin} market close failed (429), will retry next cycle")
                     else:
                         print(f"  {coin} position already flat, skip market_close")
                 except Exception as e:
