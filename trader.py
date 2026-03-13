@@ -1252,6 +1252,13 @@ def run_cycle(info, exchange, address):
         allow_sell = True
         inv_extra_skew = 0.0
 
+        # Per-coin inventory cap: block entry side when over MAX_INVENTORY_USD
+        if pos_usd > MAX_INVENTORY_USD:
+            if pos_size > 0:
+                allow_buy = False  # LONG over cap: block more buying
+            elif pos_size < 0:
+                allow_sell = False  # SHORT over cap: block more selling
+
         # Total exposure check: cap total notional across all coins
         total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
                             for c, p in positions.items())
@@ -1278,7 +1285,7 @@ def run_cycle(info, exchange, address):
                     _api_call(exchange.market_close, coin)
                     track_request()
                 except: pass
-                trip_tracker.pop(coin, None)
+                # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
                 continue
             elif hold_secs > 120:
@@ -1497,10 +1504,8 @@ def run_cycle(info, exchange, address):
                 sell_price = round(sell_price + entry_skew_px, p_dec)
                 buy_price = round(buy_price - exit_skew_px, p_dec)  # buy higher = closer to mid = faster exit
             else:
-                # Flat: symmetric skew
-                skew_px = mid * skew_bps / 10000.0
-                buy_price = round(buy_price - skew_px, p_dec)
-                sell_price = round(sell_price - skew_px, p_dec)
+                # Flat: no inventory skew (skew_bps=0 when inv_ratio=0)
+                pass
 
         # Apply flow shift
         if flow_shift_applied != 0:
@@ -1563,8 +1568,6 @@ def run_cycle(info, exchange, address):
                 size = round(size * adverse_size_mult[coin], s_dec)
                 if size * mid < 10.0:
                     size = round(10.5 / mid, s_dec)
-                # Also widen spread
-                spread_bps += 2
             else:
                 adverse_size_mult.pop(coin, None)
                 adverse_pause_until.pop(coin, None)
@@ -1588,6 +1591,10 @@ def run_cycle(info, exchange, address):
         # --- BUY LEVELS ---
         if allow_buy:
             keep_bps, replace_bps = get_drift_thresholds()
+            # Tighten drift thresholds on EXIT side when inventory is heavy
+            if inv_ratio < -0.5:  # SHORT: buy is the exit side
+                keep_bps = min(keep_bps, 5)
+                replace_bps = min(replace_bps, 10)
             if existing_buys:
                 closest_buy = min(existing_buys.keys(), key=lambda p: abs(p - buy_levels[0]))
                 top_buy_drift = abs(closest_buy - buy_levels[0]) / mid * 10000
@@ -1639,6 +1646,10 @@ def run_cycle(info, exchange, address):
         # --- SELL LEVELS ---
         if allow_sell:
             keep_bps, replace_bps = get_drift_thresholds()
+            # Tighten drift thresholds on EXIT side when inventory is heavy
+            if inv_ratio > 0.5:  # LONG: sell is the exit side
+                keep_bps = min(keep_bps, 5)
+                replace_bps = min(replace_bps, 10)
             if existing_sells:
                 closest_sell = min(existing_sells.keys(), key=lambda p: abs(p - sell_levels[0]))
                 top_sell_drift = abs(closest_sell - sell_levels[0]) / mid * 10000
