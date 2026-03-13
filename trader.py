@@ -724,7 +724,6 @@ def check_fills(info, address):
                 tg_send(tg_msg)
 
                 # Strategy pause: if last 20 trips avg net < 0, pause 60s
-                global strategy_pause_until
                 if len(completed_trips) >= 20:
                     recent_20 = completed_trips[-20:]
                     avg_recent = sum(t["net"] for t in recent_20) / 20
@@ -1167,19 +1166,6 @@ def run_cycle(info, exchange, address):
         pos_usd = abs(pos_size) * mid
         entry_price = pos.get("entry_price", 0)
 
-        # Total exposure check: sum of all position notionals
-        total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
-                            for c, p in positions.items())
-        if total_exposure > MAX_POSITION_NOTIONAL:
-            # Only allow reduce-side quoting
-            if pos_size > 0:
-                allow_buy = False
-            elif pos_size < 0:
-                allow_sell = False
-            elif total_exposure > MAX_POSITION_NOTIONAL * 1.2:
-                print(f"  {coin} | EXPOSURE CAP: ${total_exposure:.2f} > ${MAX_POSITION_NOTIONAL}")
-                continue
-
         # Risk check
         risk_reason = risk_check(account_value, vol_bps, pos_usd)
         if risk_reason:
@@ -1240,6 +1226,31 @@ def run_cycle(info, exchange, address):
                 live_quotes.pop(coin, None)
                 continue
 
+        # === FLOW-AWARE QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
+
+        inventory_usd = pos_size * mid
+        inv_ratio = 0.0
+        if MAX_INVENTORY_USD > 0:
+            inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
+
+        # Entry/Exit split: exits always allowed, entries gated by score
+        is_exit_only = pair in exit_only_pairs
+        allow_buy = True
+        allow_sell = True
+        inv_extra_skew = 0.0
+
+        # Total exposure check: cap total notional across all coins
+        total_exposure = sum(abs(p.get("size", 0)) * last_prices.get(f"{c}-PERP", {}).get("mid", 0)
+                            for c, p in positions.items())
+        if total_exposure > MAX_POSITION_NOTIONAL:
+            if pos_size > 0:
+                allow_buy = False  # only allow sell to reduce
+            elif pos_size < 0:
+                allow_sell = False  # only allow buy to reduce
+            elif total_exposure > MAX_POSITION_NOTIONAL * 1.2:
+                print(f"  {coin} | EXPOSURE CAP: ${total_exposure:.2f} > ${MAX_POSITION_NOTIONAL}")
+                continue
+
         # === MAX HOLD TIME: escalating exit urgency ===
         open_leg = trip_tracker.get(coin)
         if open_leg and pos_size != 0:
@@ -1260,19 +1271,6 @@ def run_cycle(info, exchange, address):
             elif hold_secs > 120:
                 # 2+ minutes: widen exit side aggressively
                 inv_extra_skew = max(inv_extra_skew, 8.0)
-
-        # === FLOW-AWARE QUEUE QUALITY + MULTI-QUOTE MARKET MAKING ===
-
-        inventory_usd = pos_size * mid
-        inv_ratio = 0.0
-        if MAX_INVENTORY_USD > 0:
-            inv_ratio = max(-1.0, min(1.0, inventory_usd / MAX_INVENTORY_USD))
-
-        # Entry/Exit split: exits always allowed, entries gated by score
-        is_exit_only = pair in exit_only_pairs
-        allow_buy = True
-        allow_sell = True
-        inv_extra_skew = 0.0
 
         if is_exit_only:
             # Score below threshold — only allow the exit side
@@ -1421,8 +1419,28 @@ def run_cycle(info, exchange, address):
             sell_price = round(best_ask - ask_step * tick, p_dec)
             buy_reason = f"penny x{bid_step}" if bid_step > 0 else "join bid"
             sell_reason = f"penny x{ask_step}" if ask_step > 0 else "join ask"
+        elif pos_size != 0:
+            # Spread too tight BUT we have inventory — allow exit side only
+            # Step inside spread aggressively for the exit side
+            quotes_skipped_profitability += 1
+            if pos_size > 0:
+                # LONG: need to sell to exit — penny the ask aggressively
+                allow_buy = False
+                buy_price = best_bid  # placeholder, won't be used
+                sell_price = round(best_ask - tick, p_dec)  # step inside ask
+                buy_reason = "gated"
+                sell_reason = "exit-penny"
+                print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, sell-only exit")
+            else:
+                # SHORT: need to buy to exit — penny the bid aggressively
+                allow_sell = False
+                sell_price = best_ask  # placeholder, won't be used
+                buy_price = round(best_bid + tick, p_dec)  # step inside bid
+                buy_reason = "exit-penny"
+                sell_reason = "gated"
+                print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, buy-only exit")
         else:
-            # Spread too tight for profitability — gate it
+            # Spread too tight, no inventory — gate both sides
             expected_net_tight = mkt_spread * size - 2 * (size * mid * MAKER_FEE_BPS / 10000)
             last_profitability_diag["expected_net"] = round(expected_net_tight, 6)
             if coin_orders:
@@ -1437,8 +1455,12 @@ def run_cycle(info, exchange, address):
         # Apply inventory skew ASYMMETRICALLY
         # LONG (inv_ratio > 0): push sell DOWN (aggressive exit), push buy DOWN (less entry)
         # SHORT (inv_ratio < 0): push buy UP (aggressive exit), push sell UP (less entry)
-        entry_skew_bps = skew_bps + inv_extra_skew * (1 if inv_ratio > 0 else -1)
-        exit_skew_bps = -abs(inv_extra_skew)  # always push exit side TOWARD mid
+        # Cap skew so it never exceeds half the current spread (prevents inversion)
+        half_spread_bps = mkt_spread_bps / 2
+        max_skew_bps = max(half_spread_bps - 1.0, 2.0)  # leave at least 1bps margin
+        capped_extra = min(inv_extra_skew, max_skew_bps)
+        entry_skew_bps = skew_bps + capped_extra * (1 if inv_ratio > 0 else -1)
+        exit_skew_bps = -min(abs(capped_extra), max_skew_bps)  # push exit toward mid, capped
         entry_skew_px = mid * entry_skew_bps / 10000.0
         exit_skew_px = mid * exit_skew_bps / 10000.0
         if inv_ratio > 0:
