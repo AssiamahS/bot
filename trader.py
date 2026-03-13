@@ -133,7 +133,7 @@ VOL_WINDOW = 20
 # Risk governor limits (scaled for small portfolio)
 MAX_DRAWDOWN = 0.30  # raised: account already absorbed prior losses, protect from here
 MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
-MAX_POSITION_NOTIONAL = 12.0  # hard cap: total exposure across all coins cannot exceed this
+MAX_POSITION_NOTIONAL = 25.0  # hard cap: total exposure across all coins cannot exceed this
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
