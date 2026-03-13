@@ -672,14 +672,20 @@ def check_fills(info, address):
                     adverse_size_mult[coin] = 0.5
                     # Hard lockout: stop quoting this side entirely
                     adverse_side_locked[coin] = {"side": side, "until": now_fill + 120.0}
-                    # Cancel resting orders on locked side immediately
+                    # Cancel ALL resting orders for this coin immediately
+                    # (pre-lockout orders can still fill if only cancelled by side)
                     try:
                         _ords = _api_call(info.open_orders, address) or []
+                        _cancelled = 0
                         for _o in _ords:
-                            if _o.get('coin') == coin and _o.get('side') == side:
-                                try: exchange.cancel(coin, _o['oid'])
+                            if _o.get('coin') == coin:
+                                try:
+                                    exchange.cancel(coin, _o['oid'])
+                                    _cancelled += 1
                                 except: pass
-                        print(f'  >>> LOCKOUT: cancelled {coin} {side}-side resting orders')
+                        if _cancelled:
+                            print(f'  >>> LOCKOUT: cancelled ALL {_cancelled} {coin} resting orders')
+                        live_quotes.pop(coin, None)
                     except Exception:
                         pass
                     tg_send(f"🔒 <b>SIDE LOCKED</b> {coin}: {consec}x{side} - blocking for 120s")
@@ -687,6 +693,14 @@ def check_fills(info, address):
                     consec_warn = f" ⚠️{consec}x{side} PAUSED"
                     adverse_pause_until[coin] = now_fill + 30.0
                     adverse_size_mult[coin] = 0.5
+                    # Cancel resting orders on the adverse side to stop bleeding
+                    try:
+                        _ords = _api_call(info.open_orders, address) or []
+                        for _o in _ords:
+                            if _o.get('coin') == coin and _o.get('side') == side:
+                                try: exchange.cancel(coin, _o['oid'])
+                                except: pass
+                    except: pass
 
                 print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps{consec_warn}")
                 emoji = "🟢" if side == "B" else "🔴"
@@ -1248,12 +1262,12 @@ def run_cycle(info, exchange, address):
 
         # Flow-based adverse selection protection
         # If trade flow is heavily one-sided, stop quoting the side that gets picked off
-        if flow_total > 5.0:
-            if flow_imb < -0.7:
-                # Heavy selling: stop buying (you'd buy right before a drop)
+        if flow_total > 2.0:
+            if flow_imb < -0.5:
+                # Selling pressure: stop buying (you'd buy right before a drop)
                 allow_buy = False
-            elif flow_imb > 0.7:
-                # Heavy buying: stop selling (you'd sell right before a pump)
+            elif flow_imb > 0.5:
+                # Buying pressure: stop selling (you'd sell right before a pump)
                 allow_sell = False
 
         # Hard lockout: block side entirely after consecutive adverse fills
