@@ -200,7 +200,18 @@ ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
 last_quote_time = {}  # coin -> timestamp of last quote update
-MIN_QUOTE_INTERVAL = 8.0  # throttle: reduce request churn for volume/request ratio
+# Adaptive quote interval: fast when budget healthy, slow when tight
+MIN_QUOTE_INTERVAL_FAST = 4.0   # when budget is healthy (>1000 remaining)
+MIN_QUOTE_INTERVAL_NORMAL = 6.0 # moderate budget (500-1000)
+MIN_QUOTE_INTERVAL_SLOW = 10.0  # low budget (<500)
+
+def get_quote_interval():
+    remaining = request_budget_remaining()
+    if remaining < 500:
+        return MIN_QUOTE_INTERVAL_SLOW
+    elif remaining < 1000:
+        return MIN_QUOTE_INTERVAL_NORMAL
+    return MIN_QUOTE_INTERVAL_FAST
 
 # Trade flow tracking (updated by WS trades callback)
 recent_trades = {}  # coin -> deque of {"ts", "px", "sz", "side"}
@@ -1534,7 +1545,7 @@ def main():
     print("=" * 55)
     print("  Hyperliquid Market Maker (Event-Driven)")
     print(f"  Pairs: {PAIRS}")
-    print(f"  Size: ${ORDER_SIZE_USD}/side | Min quote interval: {MIN_QUOTE_INTERVAL}s")
+    print(f"  Size: ${ORDER_SIZE_USD}/side | Quote interval: {MIN_QUOTE_INTERVAL_FAST}-{MIN_QUOTE_INTERVAL_SLOW}s (adaptive)")
     safety = SAFETY_BPS_STRICT if PROFITABILITY_MODE == "strict" else SAFETY_BPS_AGGRESSIVE
     req = 2 * MAKER_FEE_BPS + safety
     print(f"  Mode: {PROFITABILITY_MODE} | Required: {req:.1f}bps | Maker fee: {MAKER_FEE_BPS}bps")
@@ -1565,7 +1576,8 @@ def main():
             now = time.time()
             for coin in [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]:
                 last_t = last_quote_time.get(coin, 0)
-                if now - last_t < MIN_QUOTE_INTERVAL:
+                quote_interval = get_quote_interval()
+                if now - last_t < quote_interval:
                     continue  # too soon for this coin
 
             # Refresh account state periodically (every 10s, not every cycle)
