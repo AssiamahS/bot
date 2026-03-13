@@ -459,10 +459,12 @@ def risk_check(equity, vol_bps, inventory_usd):
     """Risk governor: returns reason string if trading should pause, else None.
     Inventory is handled by side-gating, not cooldown — only pause on drawdown/volatility.
     """
-    if initial_portfolio_value and initial_portfolio_value > 0:
+    if initial_portfolio_value and initial_portfolio_value > 0 and equity > 0:
         drawdown = (initial_portfolio_value - equity) / initial_portfolio_value
         if drawdown > MAX_DRAWDOWN:
-            return f"drawdown {drawdown*100:.1f}%"
+            # Only trigger if equity is a reasonable number (not a 429 partial read)
+            if equity > 5.0:  # sanity: ignore obviously wrong equity values
+                return f"drawdown {drawdown*100:.1f}%"
     if vol_bps > MAX_VOLATILITY_BPS:
         return f"volatility {vol_bps:.0f}bps"
     return None
@@ -931,7 +933,7 @@ def run_cycle(info, exchange, address):
     Scores all pairs, only quotes the top MAX_QUOTE_PAIRS.
     Cancels orders on pairs that fall out of the top rank.
     """
-    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag
+    global active_orders, risk_cooldown_until, live_quotes, round_trips, strategy_pause_until, quote_attempts, quotes_skipped_profitability, quotes_placed, last_profitability_diag, request_budget_paused
 
     # Risk cooldown check
     if time.time() < risk_cooldown_until:
