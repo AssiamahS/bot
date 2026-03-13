@@ -353,10 +353,18 @@ def get_ws_book(coin):
         return None
     best_bid = bids[0]["px"]
     best_ask = asks[0]["px"]
+    bid_vol = bids[0]["sz"]
+    ask_vol = asks[0]["sz"]
+    # Microprice: volume-weighted mid biased toward side with more pressure
+    if bid_vol + ask_vol > 0:
+        microprice = (best_bid * ask_vol + best_ask * bid_vol) / (bid_vol + ask_vol)
+    else:
+        microprice = (best_bid + best_ask) / 2
     return {
         "best_bid": best_bid,
         "best_ask": best_ask,
         "mid": (best_bid + best_ask) / 2,
+        "microprice": microprice,
         "spread": best_ask - best_bid,
         "bid_size": bids[0]["sz"],
         "ask_size": asks[0]["sz"],
@@ -592,6 +600,7 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
         statuses = data.get("statuses", []) if isinstance(data, dict) else []
         if statuses and isinstance(statuses[0], dict) and "resting" in statuses[0]:
             oid = statuses[0]["resting"]["oid"]
+            track_request()
             side = "BUY" if is_buy else "SELL"
             print(f"  {side:4s} {size} {coin} @ ${price} -> {oid}")
             active_orders.append({
@@ -756,6 +765,7 @@ def check_fills(info, address):
                     "closed_pnl": closed_pnl,
                 }
                 all_fills.append(fill)
+                track_volume(cost)  # track for request budget calculation
 
                 for p in PAIRS:
                     if coin in p:
@@ -876,7 +886,7 @@ def get_open_orders_by_coin(info, address):
 
 
 MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
-MIN_SCORE_THRESHOLD = 2.0  # lowered: allow quoting when edge > fees
+MIN_SCORE_THRESHOLD = -2.0  # allow exit-only pairs with moderate negative score
 
 
 def check_weak_pair(coin):
@@ -914,9 +924,8 @@ def rank_pair_score(coin, price_data, vol_bps, positions):
     mid = price_data["mid"]
     mkt_spread_bps = price_data["spread"] / mid * 10000 if mid > 0 else 0
 
-    # Hard filter: spread must be >= MIN_SPREAD_BPS
-    if mkt_spread_bps < MIN_SPREAD_BPS:
-        return -100, {"spread": round(mkt_spread_bps, 1), "fee": 0, "vol": 0, "flow": 0, "crowd": 0, "inv": 0, "hold": 0, "score": -100}
+    # Soft penalty for tight spreads (profitability gate handles the hard filter)
+    # No hard -100 here — let exit-only mode work even on tight pairs
 
     # Fee penalty: 2x maker fee (both legs)
     fee_penalty = 2 * MAKER_FEE_BPS
@@ -1101,6 +1110,7 @@ def run_cycle(info, exchange, address):
         vol_bps = cached["vol_bps"]
 
         mid = price_data["mid"]
+        microprice = price_data.get("microprice", mid)
         best_bid = price_data["best_bid"]
         best_ask = price_data["best_ask"]
         bid_top_size = price_data["bid_size"]
@@ -1271,9 +1281,8 @@ def run_cycle(info, exchange, address):
             spread_bps += 4
         target_spread = mid * spread_bps / 10000
 
-        # Shift fair value based on trade flow
-        # Buyers lifting asks -> raise fair value, sellers hitting bids -> lower
-        fair_mid = mid
+        # Use microprice as fair value base (volume-weighted, more accurate than raw mid)
+        fair_mid = microprice
         flow_shift_applied = 0
         if abs(flow_imb) > 0.3 and flow_total > 1.0:
             # Scale shift: 0.3-1.0 imbalance -> 0 to FLOW_SHIFT_BPS
