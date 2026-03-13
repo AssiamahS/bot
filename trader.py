@@ -24,6 +24,17 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 from tg_commander import TelegramCommander
 
+# === SINGLETON LOCK: prevent multiple instances ===
+import fcntl
+_lock_file = open("/tmp/trader.lock", "w")
+try:
+    fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _lock_file.write(str(os.getpid()))
+    _lock_file.flush()
+except IOError:
+    print("ERROR: Another trader instance is already running. Exiting.")
+    sys.exit(1)
+
 def _api_call(fn, *args, **kwargs):
     """Wrap REST API calls with retry on 429."""
     for attempt in range(3):
