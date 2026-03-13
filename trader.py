@@ -140,7 +140,17 @@ quotes_placed = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
-STALE_BPS = 10  # refresh orders if price moved >10bps (reduce churn for request/volume limit)
+# Queue-preserving quoting: two-tier drift thresholds
+QUEUE_KEEP_BPS = 8    # keep resting order if drift <= this (preserve queue position)
+REPLACE_BPS = 15      # only cancel+replace if drift exceeds this
+# Dynamic: widen tolerance when request budget is low
+def get_drift_thresholds():
+    remaining = request_budget_remaining()
+    if remaining < 500:
+        return 12, 20  # very conservative when budget low
+    elif remaining < 1000:
+        return 10, 18  # conservative
+    return QUEUE_KEEP_BPS, REPLACE_BPS  # normal
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 6.0 bps
@@ -1321,17 +1331,39 @@ def run_cycle(info, exchange, address):
 
         # --- BUY LEVELS ---
         if allow_buy:
-            # Find closest existing buy to our top level for drift check
-            top_buy_drift = 0
+            keep_bps, replace_bps = get_drift_thresholds()
             if existing_buys:
                 closest_buy = min(existing_buys.keys(), key=lambda p: abs(p - buy_levels[0]))
                 top_buy_drift = abs(closest_buy - buy_levels[0]) / mid * 10000
+                crossed = any(px >= best_ask for px in existing_buys)
+                wrong_count = len(existing_buys) != num_levels
 
-            if top_buy_drift > STALE_BPS or len(existing_buys) != num_levels:
-                # Cancel all existing buys and re-place
-                for oid in existing_buys.values():
-                    try: exchange.cancel(coin, oid)
-                    except: pass
+                if crossed or (top_buy_drift > replace_bps) or wrong_count:
+                    # Must replace: crossed book, very stale, or wrong level count
+                    for oid in existing_buys.values():
+                        try:
+                            exchange.cancel(coin, oid)
+                            track_request()
+                        except: pass
+                    placed = []
+                    for lvl_px in buy_levels:
+                        oid = place_order(exchange, coin, True, size, lvl_px)
+                        if oid:
+                            placed.append(lvl_px)
+                    reason = "crossed" if crossed else f"stale {top_buy_drift:.0f}bps"
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
+                    print(f"  BUY x{len(placed)}: {prices_str} (repriced: {reason})")
+                    quotes["buy_levels"] = buy_levels
+                elif top_buy_drift <= keep_bps:
+                    # Queue preserved: order is competitive
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_buys.keys(), reverse=True))
+                    print(f"  BUY x{len(existing_buys)} resting: {prices_str} ({top_buy_drift:.0f}bps drift, queue kept)")
+                else:
+                    # Middle zone: drift between keep and replace — hold position
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_buys.keys(), reverse=True))
+                    print(f"  BUY x{len(existing_buys)} resting: {prices_str} ({top_buy_drift:.0f}bps drift, hold)")
+            else:
+                # No existing buys — place fresh
                 placed = []
                 for lvl_px in buy_levels:
                     oid = place_order(exchange, coin, True, size, lvl_px)
@@ -1340,9 +1372,6 @@ def run_cycle(info, exchange, address):
                 prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
                 print(f"  BUY x{len(placed)}: {prices_str} ({buy_reason})")
                 quotes["buy_levels"] = buy_levels
-            else:
-                prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_buys.keys(), reverse=True))
-                print(f"  BUY x{len(existing_buys)} resting: {prices_str} ({top_buy_drift:.0f}bps drift, ok)")
         else:
             # Over inventory limit, cancel all buys
             if existing_buys:
@@ -1353,15 +1382,35 @@ def run_cycle(info, exchange, address):
 
         # --- SELL LEVELS ---
         if allow_sell:
-            top_sell_drift = 0
+            keep_bps, replace_bps = get_drift_thresholds()
             if existing_sells:
                 closest_sell = min(existing_sells.keys(), key=lambda p: abs(p - sell_levels[0]))
                 top_sell_drift = abs(closest_sell - sell_levels[0]) / mid * 10000
+                crossed = any(px <= best_bid for px in existing_sells)
+                wrong_count = len(existing_sells) != num_levels
 
-            if top_sell_drift > STALE_BPS or len(existing_sells) != num_levels:
-                for oid in existing_sells.values():
-                    try: exchange.cancel(coin, oid)
-                    except: pass
+                if crossed or (top_sell_drift > replace_bps) or wrong_count:
+                    for oid in existing_sells.values():
+                        try:
+                            exchange.cancel(coin, oid)
+                            track_request()
+                        except: pass
+                    placed = []
+                    for lvl_px in sell_levels:
+                        oid = place_order(exchange, coin, False, size, lvl_px)
+                        if oid:
+                            placed.append(lvl_px)
+                    reason = "crossed" if crossed else f"stale {top_sell_drift:.0f}bps"
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
+                    print(f"  SELL x{len(placed)}: {prices_str} (repriced: {reason})")
+                    quotes["sell_levels"] = sell_levels
+                elif top_sell_drift <= keep_bps:
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_sells.keys()))
+                    print(f"  SELL x{len(existing_sells)} resting: {prices_str} ({top_sell_drift:.0f}bps drift, queue kept)")
+                else:
+                    prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_sells.keys()))
+                    print(f"  SELL x{len(existing_sells)} resting: {prices_str} ({top_sell_drift:.0f}bps drift, hold)")
+            else:
                 placed = []
                 for lvl_px in sell_levels:
                     oid = place_order(exchange, coin, False, size, lvl_px)
@@ -1370,9 +1419,6 @@ def run_cycle(info, exchange, address):
                 prices_str = " ".join(f"${p:.{p_dec}f}" for p in placed)
                 print(f"  SELL x{len(placed)}: {prices_str} ({sell_reason})")
                 quotes["sell_levels"] = sell_levels
-            else:
-                prices_str = " ".join(f"${p:.{p_dec}f}" for p in sorted(existing_sells.keys()))
-                print(f"  SELL x{len(existing_sells)} resting: {prices_str} ({top_sell_drift:.0f}bps drift, ok)")
         else:
             if existing_sells:
                 print(f"  Cancel {len(existing_sells)} SELLs (no sell: inv={inv_ratio:.0%})")
