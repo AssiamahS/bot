@@ -613,12 +613,15 @@ def cancel_coin_orders(exchange: Exchange, info: Info, address: str, coin: str):
         print(f"  Cancel error {coin}: {e}")
 
 
-def place_order(exchange: Exchange, coin: str, is_buy: bool, size: float, price: float) -> Optional[int]:
-    """Place a limit post-only (ALO) order."""
+def place_order(exchange: Exchange, coin: str, is_buy: bool, size: float, price: float,
+                taker: bool = False, reduce_only: bool = False) -> Optional[int]:
+    """Place a limit order. ALO (post-only) by default, IOC for taker exits."""
     try:
+        order_type = {"limit": {"tif": "Ioc"}} if taker else {"limit": {"tif": "Alo"}}
         result = exchange.order(
             coin, is_buy, size, price,
-            {"limit": {"tif": "Alo"}},
+            order_type,
+            reduce_only=reduce_only,
         )
         if isinstance(result, str):
             return None
