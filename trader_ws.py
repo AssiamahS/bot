@@ -153,6 +153,28 @@ def compute_trade_flow(coin: str) -> float:
     return max(-FLOW_ALPHA_BPS, min(FLOW_ALPHA_BPS, raw))
 
 
+def compute_micro_velocity(coin: str, mid: float) -> float:
+    """Compute microprice velocity in bps over MOMENTUM_WINDOW.
+    Positive = book pressure moving up, negative = moving down."""
+    hist = micro_history.get(coin)
+    if not hist or len(hist) < 2:
+        return 0.0
+
+    now = time.time()
+    new_micro = hist[-1][1]
+
+    # Find the oldest sample within the momentum window
+    old_micro = hist[0][1]
+    for t, micro in reversed(hist):
+        if now - t >= MOMENTUM_WINDOW:
+            old_micro = micro
+            break
+
+    if mid <= 0:
+        return 0.0
+    return ((new_micro - old_micro) / mid) * 10000
+
+
 def compute_fair_price(coin: str) -> Optional[float]:
     """Compute fair price = microprice + trade_flow - inventory_skew."""
     mp = microprice_state.get(coin)
