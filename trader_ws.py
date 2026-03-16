@@ -235,6 +235,11 @@ def on_l2_book(msg: dict):
             prev_mp = microprice_state.get(coin, {})
             microprice_state[coin] = mp
 
+            # Record microprice history for momentum/velocity
+            if coin not in micro_history:
+                micro_history[coin] = deque(maxlen=50)
+            micro_history[coin].append((time.time(), mp["micro"]))
+
         # Check if we need to reprice
         prev_micro = prev_mp.get("micro", 0)
         if prev_micro > 0:
