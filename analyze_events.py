@@ -666,60 +666,98 @@ if (validStatuses.length > 0) {{
   }});
 }} else {{ document.getElementById('portfolio-chart').innerHTML = '<p style="color:#555;padding:20px">No portfolio data</p>'; }}
 
-// === REPLAY SLIDER ===
+// === REPLAY + TIME RANGE ===
 const slider = document.getElementById('replay-slider');
 const timeDisplay = document.getElementById('replay-time');
 const stateDisplay = document.getElementById('replay-state');
-if (allEvents.length > 0) {{
-  slider.max = allEvents.length - 1;
-  slider.value = allEvents.length - 1;
-  function updateReplay(idx) {{
-    const e = allEvents[idx];
-    const ts = e.ts || '';
-    timeDisplay.textContent = ts.replace('T', ' ').substring(0, 19);
-    // Count state up to this point
-    const subset = allEvents.slice(0, idx + 1);
-    const nFills = subset.filter(x => x.type === 'fill').length;
-    const nTrips = subset.filter(x => x.type === 'trip').length;
-    const cumPnl = subset.filter(x => x.type === 'trip').reduce((s,x) => s + (x.pnl||0), 0);
-    stateDisplay.textContent = `Fills: ${{nFills}} | Trips: ${{nTrips}} | PnL: $${{cumPnl.toFixed(4)}}`;
-    // Highlight in timeline
-    document.querySelectorAll('.timeline .ev').forEach((el, i) => {{
-      el.classList.toggle('highlighted', i === allEvents.length - 1 - idx);
-    }});
-  }}
-  slider.addEventListener('input', () => updateReplay(parseInt(slider.value)));
-  updateReplay(allEvents.length - 1);
+const timeline = document.getElementById('timeline');
+let filteredEvents = allEvents;
+let currentRange = 'all';
+
+function getFilteredEvents(range) {{
+  if (range === 'all' || !allEvents.length) return allEvents;
+  const last = new Date(allEvents[allEvents.length - 1].ts);
+  const ms = {{ '1m': 30*86400000, '1w': 7*86400000, '1d': 86400000, '6h': 6*3600000, '1h': 3600000 }};
+  const cutoff = new Date(last.getTime() - (ms[range] || 0));
+  return allEvents.filter(e => new Date(e.ts) >= cutoff);
 }}
 
-// === TIMELINE ===
-const timeline = document.getElementById('timeline');
-const recentEvents = allEvents.slice(-200).reverse();
-recentEvents.forEach((e, i) => {{
-  const div = document.createElement('div');
-  div.className = 'ev';
-  const ts = (e.ts || '').replace('T',' ').substring(0, 16) || '??';
+function formatEventDetail(e) {{
   const type = e.type || '?';
-  let detail = '';
   if (type === 'fill') {{
     const arrow = e.side === 'buy' || e.side === 'b' ? '\\u25B2' : '\\u25BC';
-    detail = `${{arrow}} ${{e.size}} ${{e.coin}} @ $${{e.price}} fee=$${{(e.fee||0).toFixed(4)}}`;
+    return `${{arrow}} ${{e.size}} ${{e.coin}} @ $${{e.price}} fee=$${{(e.fee||0).toFixed(4)}}`;
   }} else if (type === 'trip') {{
     const sign = e.pnl >= 0 ? '+' : '';
-    detail = `#${{e.trip_num}} ${{e.coin}} ${{sign}}$${{(e.pnl||0).toFixed(4)}}`;
+    return `#${{e.trip_num}} ${{e.coin}} ${{sign}}$${{(e.pnl||0).toFixed(4)}}`;
   }} else if (type === 'risk') {{
-    detail = `${{e.coin}} ${{e.reason}}`;
+    return `${{e.coin}} ${{e.reason}}`;
   }} else if (type === 'error') {{
-    detail = (e.message || '').substring(0, 60);
+    return (e.message || '').substring(0, 60);
   }} else if (type === 'bot_start') {{
-    detail = 'Session started';
+    return 'Session started';
   }} else if (type === 'bot_stop') {{
-    detail = 'Session stopped';
+    return 'Session stopped';
   }}
-  div.innerHTML = `<span class="ts">${{ts}}</span><span class="type ${{type}}">${{type}}</span><span>${{detail}}</span>`;
-  div.onclick = () => {{ slider.value = allEvents.length - 1 - i; updateReplay(parseInt(slider.value)); }};
-  timeline.appendChild(div);
+  return '';
+}}
+
+function updateReplay(idx) {{
+  if (!filteredEvents.length) return;
+  const e = filteredEvents[idx];
+  const ts = e.ts || '';
+  timeDisplay.textContent = ts.replace('T', ' ').substring(0, 19);
+  const subset = filteredEvents.slice(0, idx + 1);
+  const nFills = subset.filter(x => x.type === 'fill').length;
+  const nTrips = subset.filter(x => x.type === 'trip').length;
+  const cumPnl = subset.filter(x => x.type === 'trip').reduce((s,x) => s + (x.pnl||0), 0);
+  stateDisplay.textContent = `Fills: ${{nFills}} | Trips: ${{nTrips}} | PnL: $${{cumPnl.toFixed(4)}} | Event ${{idx+1}}/${{filteredEvents.length}}`;
+  document.querySelectorAll('.timeline .ev').forEach((el, i) => {{
+    el.classList.toggle('highlighted', i === filteredEvents.length - 1 - idx);
+  }});
+}}
+
+function buildTimeline() {{
+  timeline.innerHTML = '';
+  const displayEvents = filteredEvents.slice(-500).reverse();
+  displayEvents.forEach((e, i) => {{
+    const div = document.createElement('div');
+    div.className = 'ev';
+    const ts = (e.ts || '').replace('T',' ').substring(0, 16) || '??';
+    const type = e.type || '?';
+    const detail = formatEventDetail(e);
+    div.innerHTML = `<span class="ts">${{ts}}</span><span class="type ${{type}}">${{type}}</span><span>${{detail}}</span>`;
+    const evIdx = filteredEvents.length - 1 - i;
+    div.onclick = () => {{ slider.value = evIdx; updateReplay(evIdx); }};
+    timeline.appendChild(div);
+  }});
+}}
+
+function setRange(range) {{
+  currentRange = range;
+  filteredEvents = getFilteredEvents(range);
+  document.querySelectorAll('#range-btns button').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+  slider.max = Math.max(filteredEvents.length - 1, 0);
+  slider.value = filteredEvents.length - 1;
+  buildTimeline();
+  updateReplay(filteredEvents.length - 1);
+  // Update range info
+  if (filteredEvents.length > 0) {{
+    const first = filteredEvents[0].ts.replace('T',' ').substring(0,16);
+    const last = filteredEvents[filteredEvents.length-1].ts.replace('T',' ').substring(0,16);
+    const nF = filteredEvents.filter(x => x.type==='fill').length;
+    const nT = filteredEvents.filter(x => x.type==='trip').length;
+    timeDisplay.textContent = `${{first}} -> ${{last}} (${{filteredEvents.length}} events, ${{nF}} fills, ${{nT}} trips)`;
+  }}
+}}
+
+document.querySelectorAll('#range-btns button').forEach(b => {{
+  b.addEventListener('click', () => setRange(b.dataset.range));
 }});
+slider.addEventListener('input', () => updateReplay(parseInt(slider.value)));
+
+// Initialize
+setRange('all');
 
 // === AI INSIGHTS ===
 const insightsDiv = document.getElementById('insights');
