@@ -57,6 +57,13 @@ QUOTE_COOLDOWN_MS = 150        # min ms between quote updates per coin
 MOMENTUM_WINDOW = 0.8          # seconds lookback for microprice velocity
 MOMENTUM_THRESHOLD_BPS = 2.0   # pause quoting if velocity exceeds this
 
+# Exit-mode state machine
+EXIT_MODE_POSITION_USD = 15.0  # switch to exit mode above this inventory
+EXIT_SPREAD_TIGHTEN = 0.5     # multiply exit-side half_spread by this (tighter)
+EXIT_ENTRY_SPREAD_WIDEN = 2.0  # multiply entry-side half_spread by this (wider)
+MAX_INVENTORY_AGE_SECS = 20.0  # after this, escalate exit aggressiveness
+STALE_INVENTORY_TIGHTEN = 0.3  # multiply exit spread by this when inventory is stale
+
 COIN_MAP = {
     "BTC-PERP": "BTC",
     "ETH-PERP": "ETH",
