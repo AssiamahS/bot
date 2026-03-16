@@ -286,72 +286,158 @@ def print_report(events, as_json=False):
     print(f"  {'='*56}")
 
 
+def _compute_vol_surface(fills):
+    """Pre-compute volatility surface data: rolling vol per coin in time buckets."""
+    from collections import defaultdict
+    import math
+
+    by_coin = defaultdict(list)
+    for f in fills:
+        if f.get("price") and f.get("ts") and f.get("coin"):
+            by_coin[f["coin"]].append({"ts": f["ts"], "price": f["price"]})
+
+    coins = sorted(by_coin.keys())
+    if not coins:
+        return {"coins": [], "time_labels": [], "z": [], "fill_markers": []}
+
+    # Sort each coin's fills by time
+    for c in coins:
+        by_coin[c].sort(key=lambda x: x["ts"])
+
+    # Create time buckets (30-min windows)
+    all_ts = sorted(set(f["ts"] for fs in by_coin.values() for f in fs))
+    if not all_ts:
+        return {"coins": [], "time_labels": [], "z": [], "fill_markers": []}
+
+    # Bucket by hour
+    buckets = []
+    seen_buckets = set()
+    for ts in all_ts:
+        bucket = ts[:13]  # YYYY-MM-DDTHH
+        if bucket not in seen_buckets:
+            seen_buckets.add(bucket)
+            buckets.append(bucket)
+    buckets.sort()
+
+    # Compute rolling volatility (price range / mean as bps) per coin per bucket
+    z_matrix = []
+    for coin in coins:
+        row = []
+        fills_for_coin = by_coin[coin]
+        for bucket in buckets:
+            bucket_fills = [f for f in fills_for_coin if f["ts"][:13] == bucket]
+            if len(bucket_fills) >= 2:
+                prices = [f["price"] for f in bucket_fills]
+                mean_p = sum(prices) / len(prices)
+                if mean_p > 0:
+                    price_range = max(prices) - min(prices)
+                    vol_bps = (price_range / mean_p) * 10000
+                else:
+                    vol_bps = 0
+            elif len(bucket_fills) == 1:
+                vol_bps = 0
+            else:
+                vol_bps = None  # no data
+            row.append(vol_bps)
+        z_matrix.append(row)
+
+    return {
+        "coins": coins,
+        "time_labels": buckets,
+        "z": z_matrix,
+    }
+
+
 def generate_surface_html(events, output_path=None):
-    """Generate an interactive volatility surface HTML using Plotly CDN."""
+    """Generate an interactive command center with 3D volatility surface."""
     fills = [e for e in events if e.get("type") == "fill"]
     statuses = [e for e in events if e.get("type") in ("status", "slywatch_snapshot")]
+    trips = [e for e in events if e.get("type") == "trip"]
+    contexts = [e for e in events if e.get("type") == "fill_context"]
+    risks = [e for e in events if e.get("type") == "risk"]
+    all_events = sorted(
+        [e for e in events if e.get("type") in ("fill", "trip", "risk", "bot_start", "bot_stop", "error")],
+        key=lambda e: e.get("ts", "")
+    )
+
+    # Pre-compute surface data server-side
+    surface = _compute_vol_surface(fills)
 
     fills_json = json.dumps([{
-        "ts": f.get("ts", ""),
-        "coin": f.get("coin", ""),
-        "price": f.get("price", 0),
-        "side": f.get("side", ""),
-        "size": f.get("size", 0),
-        "fee": f.get("fee", 0),
+        "ts": f.get("ts", ""), "coin": f.get("coin", ""),
+        "price": f.get("price", 0), "side": f.get("side", ""),
+        "size": f.get("size", 0), "fee": f.get("fee", 0),
         "pnl": f.get("closed_pnl", 0),
     } for f in fills])
 
     statuses_json = json.dumps([{
-        "ts": s.get("ts", ""),
-        "portfolio": s.get("portfolio", 0),
-        "pnl": s.get("pnl", 0),
-        "fills": s.get("fills", 0),
+        "ts": s.get("ts", ""), "portfolio": s.get("portfolio", 0),
+        "pnl": s.get("pnl", 0), "fills": s.get("fills", 0),
     } for s in statuses])
 
-    trips = [e for e in events if e.get("type") == "trip"]
     trips_json = json.dumps([{
-        "ts": t.get("ts", ""),
-        "coin": t.get("coin", ""),
-        "net_pnl": t.get("net_pnl", 0),
-        "trip_num": t.get("trip_num", 0),
+        "ts": t.get("ts", ""), "coin": t.get("coin", ""),
+        "net_pnl": t.get("net_pnl", 0), "trip_num": t.get("trip_num", 0),
     } for t in trips])
 
-    contexts = [e for e in events if e.get("type") == "fill_context"]
     contexts_json = json.dumps([{
-        "ts": c.get("ts", ""),
-        "coin": c.get("coin", ""),
-        "edge_bps": c.get("edge_bps", 0),
-        "mid": c.get("mid", 0),
+        "ts": c.get("ts", ""), "coin": c.get("coin", ""),
+        "edge_bps": c.get("edge_bps", 0), "mid": c.get("mid", 0),
     } for c in contexts])
+
+    risks_json = json.dumps([{
+        "ts": r.get("ts", ""), "coin": r.get("coin", ""),
+        "reason": r.get("reason", ""),
+    } for r in risks])
+
+    surface_json = json.dumps(surface)
+    all_events_json = json.dumps([{
+        "ts": e.get("ts", ""), "type": e.get("type", ""),
+        "coin": e.get("coin", ""), "side": e.get("side", ""),
+        "price": e.get("price", 0), "size": e.get("size", 0),
+        "fee": e.get("fee", 0), "pnl": e.get("closed_pnl", e.get("net_pnl", 0)),
+        "reason": e.get("reason", ""), "trip_num": e.get("trip_num", 0),
+        "message": e.get("message", ""),
+    } for e in all_events[-500:]])
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
-<title>HL Bot - Volatility Surface & Debugger</title>
+<title>HL Bot Command Center</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ background: #0a0a0f; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; }}
-  .header {{ padding: 16px 24px; border-bottom: 1px solid #1a1a2e; display: flex; justify-content: space-between; align-items: center; }}
-  .header h1 {{ font-size: 18px; color: #00ff88; }}
-  .stats {{ display: flex; gap: 24px; font-size: 13px; }}
+  body {{ background: #0a0a0f; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }}
+  .header {{ padding: 12px 20px; border-bottom: 1px solid #1a1a2e; display: flex; justify-content: space-between; align-items: center; }}
+  .header h1 {{ font-size: 16px; color: #00ff88; }}
+  .stats {{ display: flex; gap: 20px; }}
   .stat {{ text-align: center; }}
-  .stat .val {{ font-size: 20px; font-weight: bold; }}
-  .stat .lbl {{ color: #666; font-size: 11px; }}
+  .stat .val {{ font-size: 18px; font-weight: bold; }}
+  .stat .lbl {{ color: #555; font-size: 10px; text-transform: uppercase; }}
   .green {{ color: #00ff88; }}
   .red {{ color: #ff4444; }}
-  .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #1a1a2e; }}
-  .panel {{ background: #0a0a0f; padding: 12px; }}
-  .panel h3 {{ font-size: 13px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }}
-  .chart {{ width: 100%; height: 350px; }}
-  .insights {{ padding: 16px 24px; border-top: 1px solid #1a1a2e; }}
-  .insight {{ padding: 8px 12px; margin: 4px 0; background: #111; border-left: 3px solid #ff8800; font-size: 13px; }}
+  .yellow {{ color: #ffaa00; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; gap: 1px; background: #1a1a2e; }}
+  .panel {{ background: #0a0a0f; padding: 10px; }}
+  .panel h3 {{ font-size: 11px; color: #555; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }}
+  .chart {{ width: 100%; height: 340px; }}
+  .chart-tall {{ width: 100%; height: 420px; }}
+  .full-width {{ grid-column: 1 / -1; }}
+  .replay-bar {{ padding: 10px 20px; background: #0d0d14; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; display: flex; align-items: center; gap: 16px; }}
+  .replay-bar label {{ color: #555; font-size: 11px; text-transform: uppercase; }}
+  .replay-bar input[type=range] {{ flex: 1; accent-color: #00ff88; }}
+  .replay-bar .time-display {{ color: #00ff88; min-width: 160px; font-size: 12px; }}
+  .replay-bar .state-display {{ color: #888; font-size: 11px; }}
+  .insights {{ padding: 12px 20px; border-top: 1px solid #1a1a2e; }}
+  .insights h3 {{ font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
+  .insight {{ padding: 6px 10px; margin: 3px 0; background: #111; border-left: 3px solid #ff8800; font-size: 12px; }}
   .insight.good {{ border-color: #00ff88; }}
-  .timeline {{ max-height: 300px; overflow-y: auto; font-size: 12px; }}
-  .timeline .ev {{ padding: 4px 8px; border-bottom: 1px solid #111; display: flex; gap: 12px; }}
-  .timeline .ev:hover {{ background: #111; }}
-  .timeline .ts {{ color: #666; min-width: 80px; }}
-  .timeline .type {{ min-width: 60px; font-weight: bold; }}
+  .timeline {{ max-height: 320px; overflow-y: auto; }}
+  .timeline .ev {{ padding: 3px 6px; border-bottom: 1px solid #0d0d14; display: flex; gap: 10px; font-size: 11px; cursor: pointer; }}
+  .timeline .ev:hover {{ background: #151520; }}
+  .timeline .ev.highlighted {{ background: #1a1a30; border-left: 2px solid #00ff88; }}
+  .timeline .ts {{ color: #444; min-width: 75px; }}
+  .timeline .type {{ min-width: 55px; font-weight: bold; }}
   .fill {{ color: #4488ff; }}
   .trip {{ color: #ff8800; }}
   .risk {{ color: #ff4444; }}
@@ -361,30 +447,44 @@ def generate_surface_html(events, output_path=None):
 </style>
 </head>
 <body>
+
 <div class="header">
   <h1>HL Bot Command Center</h1>
   <div class="stats" id="stats"></div>
 </div>
+
+<div class="replay-bar">
+  <label>Replay</label>
+  <input type="range" id="replay-slider" min="0" max="100" value="100">
+  <span class="time-display" id="replay-time">--</span>
+  <span class="state-display" id="replay-state"></span>
+</div>
+
 <div class="grid">
+  <div class="panel full-width">
+    <h3>3D Volatility Surface (Price Range bps per Coin over Time) — drag to rotate</h3>
+    <div id="vol-surface" class="chart-tall"></div>
+  </div>
   <div class="panel">
-    <h3>PnL Timeline</h3>
+    <h3>Cumulative PnL</h3>
     <div id="pnl-chart" class="chart"></div>
   </div>
   <div class="panel">
-    <h3>Fill Prices & Edge</h3>
+    <h3>Fill Prices (green=buy, red=sell)</h3>
     <div id="fills-chart" class="chart"></div>
   </div>
   <div class="panel">
-    <h3>Volatility Surface (Price Spread by Coin over Time)</h3>
-    <div id="vol-surface" class="chart"></div>
+    <h3>Portfolio Value</h3>
+    <div id="portfolio-chart" class="chart"></div>
   </div>
   <div class="panel">
     <h3>Event Stream</h3>
     <div class="timeline" id="timeline"></div>
   </div>
 </div>
+
 <div class="insights" id="insights">
-  <h3 style="color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">AI Debugger</h3>
+  <h3>AI Debugger</h3>
 </div>
 
 <script>
@@ -392,11 +492,11 @@ const fills = {fills_json};
 const statuses = {statuses_json};
 const trips = {trips_json};
 const contexts = {contexts_json};
-const allEvents = [...fills.map(f => ({{...f, type:'fill'}})),
-                   ...trips.map(t => ({{...t, type:'trip'}})),
-                  ].sort((a,b) => a.ts.localeCompare(b.ts));
+const risks = {risks_json};
+const surface = {surface_json};
+const allEvents = {all_events_json};
 
-// Stats
+// === STATS ===
 const totalFills = fills.length;
 const totalTrips = trips.length;
 const totalPnl = trips.reduce((s,t) => s + (t.net_pnl||0), 0);
@@ -404,155 +504,245 @@ const winners = trips.filter(t => t.net_pnl >= 0).length;
 const wr = totalTrips > 0 ? (winners/totalTrips*100).toFixed(0) : 0;
 const totalVolume = fills.reduce((s,f) => s + f.price * f.size, 0);
 const pnlClass = totalPnl >= 0 ? 'green' : 'red';
+const totalRisks = risks.length;
 
 document.getElementById('stats').innerHTML = `
-  <div class="stat"><div class="val">${{totalFills}}</div><div class="lbl">FILLS</div></div>
-  <div class="stat"><div class="val">${{totalTrips}}</div><div class="lbl">TRIPS</div></div>
-  <div class="stat"><div class="val ${{pnlClass}}">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(4)}}</div><div class="lbl">NET PNL</div></div>
-  <div class="stat"><div class="val">${{wr}}%</div><div class="lbl">WIN RATE</div></div>
-  <div class="stat"><div class="val">$${{totalVolume.toFixed(0)}}</div><div class="lbl">VOLUME</div></div>
+  <div class="stat"><div class="val">${{totalFills}}</div><div class="lbl">Fills</div></div>
+  <div class="stat"><div class="val">${{totalTrips}}</div><div class="lbl">Trips</div></div>
+  <div class="stat"><div class="val ${{pnlClass}}">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(4)}}</div><div class="lbl">Net PnL</div></div>
+  <div class="stat"><div class="val">${{wr}}%</div><div class="lbl">Win Rate</div></div>
+  <div class="stat"><div class="val">$${{totalVolume.toFixed(0)}}</div><div class="lbl">Volume</div></div>
+  <div class="stat"><div class="val yellow">${{totalRisks}}</div><div class="lbl">Risk Blocks</div></div>
 `;
 
-// PnL chart — cumulative from trips
-if (trips.length > 0) {{
-  let cumPnl = [];
-  let running = 0;
-  trips.forEach(t => {{
-    running += (t.net_pnl || 0);
-    cumPnl.push({{x: t.ts, y: running}});
+// === 3D VOLATILITY SURFACE ===
+if (surface.coins.length > 0 && surface.z.length > 0) {{
+  // Replace nulls with 0 for rendering
+  const zData = surface.z.map(row => row.map(v => v === null ? 0 : v));
+
+  const surfaceTrace = {{
+    z: zData,
+    x: surface.time_labels,
+    y: surface.coins,
+    type: 'surface',
+    colorscale: [
+      [0, '#0a0a2e'],
+      [0.2, '#1a1a6e'],
+      [0.4, '#4444aa'],
+      [0.6, '#ff8800'],
+      [0.8, '#ff4444'],
+      [1.0, '#ff0000']
+    ],
+    colorbar: {{ title: 'Vol (bps)', titlefont: {{color: '#888'}}, tickfont: {{color: '#666'}} }},
+    hovertemplate: 'Coin: %{{y}}<br>Time: %{{x}}<br>Vol: %{{z:.1f}} bps<extra></extra>',
+    lighting: {{ ambient: 0.6, diffuse: 0.5, specular: 0.3 }},
+    contours: {{
+      z: {{ show: true, usecolormap: true, highlightcolor: '#ffffff', project: {{ z: true }} }}
+    }},
+  }};
+
+  // Add fill markers as scatter3d on the surface
+  const fillMarkers = [];
+  fills.forEach(f => {{
+    const coinIdx = surface.coins.indexOf(f.coin);
+    const bucket = (f.ts || '').substring(0, 13);
+    const timeIdx = surface.time_labels.indexOf(bucket);
+    if (coinIdx >= 0 && timeIdx >= 0) {{
+      const vol = zData[coinIdx][timeIdx] || 0;
+      fillMarkers.push({{
+        x: bucket,
+        y: f.coin,
+        z: vol + 2, // slightly above surface
+        side: f.side,
+        text: `${{f.side.toUpperCase()}} ${{f.size}} ${{f.coin}} @ $${{f.price}}`,
+      }});
+    }}
   }});
-  Plotly.newPlot('pnl-chart', [{{
-    x: cumPnl.map(p => p.x),
-    y: cumPnl.map(p => p.y),
-    type: 'scatter',
-    mode: 'lines+markers',
-    line: {{color: cumPnl[cumPnl.length-1].y >= 0 ? '#00ff88' : '#ff4444', width: 2}},
-    marker: {{size: 4}},
-    fill: 'tozeroy',
-    fillcolor: cumPnl[cumPnl.length-1].y >= 0 ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)',
-  }}], {{
-    paper_bgcolor: '#0a0a0f', plot_bgcolor: '#0a0a0f',
-    xaxis: {{color: '#666', gridcolor: '#1a1a2e'}},
-    yaxis: {{color: '#666', gridcolor: '#1a1a2e', title: 'Cumulative PnL ($)'}},
-    margin: {{l:50,r:20,t:10,b:40}},
+
+  const traces = [surfaceTrace];
+  if (fillMarkers.length > 0) {{
+    traces.push({{
+      x: fillMarkers.map(m => m.x),
+      y: fillMarkers.map(m => m.y),
+      z: fillMarkers.map(m => m.z),
+      mode: 'markers',
+      type: 'scatter3d',
+      marker: {{
+        size: 5,
+        color: fillMarkers.map(m => m.side === 'buy' || m.side === 'b' ? '#00ff88' : '#ff4444'),
+        symbol: 'diamond',
+      }},
+      text: fillMarkers.map(m => m.text),
+      hoverinfo: 'text',
+      name: 'Fills',
+    }});
+  }}
+
+  Plotly.newPlot('vol-surface', traces, {{
+    paper_bgcolor: '#0a0a0f',
+    plot_bgcolor: '#0a0a0f',
+    scene: {{
+      xaxis: {{ title: 'Time', color: '#555', gridcolor: '#1a1a2e', tickangle: -30, nticks: 10 }},
+      yaxis: {{ title: 'Coin', color: '#555', gridcolor: '#1a1a2e' }},
+      zaxis: {{ title: 'Volatility (bps)', color: '#555', gridcolor: '#1a1a2e' }},
+      bgcolor: '#0a0a0f',
+      camera: {{ eye: {{ x: 1.8, y: -1.5, z: 1.2 }} }},
+    }},
+    margin: {{ l: 0, r: 0, t: 10, b: 0 }},
     showlegend: false,
   }});
 }} else {{
-  document.getElementById('pnl-chart').innerHTML = '<p style="color:#666;padding:20px">No trip data yet</p>';
+  document.getElementById('vol-surface').innerHTML = '<p style="color:#555;padding:40px;text-align:center">Need fills across multiple coins and time periods to build surface.<br>Data will appear as bot trades.</p>';
 }}
 
-// Fills chart — price dots colored by side
+// === PNL CHART ===
+if (trips.length > 0) {{
+  let cumPnl = [], running = 0;
+  trips.forEach(t => {{ running += (t.net_pnl || 0); cumPnl.push({{x: t.ts, y: running}}); }});
+  Plotly.newPlot('pnl-chart', [{{
+    x: cumPnl.map(p => p.x), y: cumPnl.map(p => p.y),
+    type: 'scatter', mode: 'lines+markers',
+    line: {{color: running >= 0 ? '#00ff88' : '#ff4444', width: 2}},
+    marker: {{size: 3}},
+    fill: 'tozeroy',
+    fillcolor: running >= 0 ? 'rgba(0,255,136,0.08)' : 'rgba(255,68,68,0.08)',
+  }}], {{
+    paper_bgcolor: '#0a0a0f', plot_bgcolor: '#0a0a0f',
+    xaxis: {{color: '#555', gridcolor: '#1a1a2e'}},
+    yaxis: {{color: '#555', gridcolor: '#1a1a2e', title: 'Cum. PnL ($)'}},
+    margin: {{l:50,r:10,t:10,b:30}}, showlegend: false,
+  }});
+}} else {{ document.getElementById('pnl-chart').innerHTML = '<p style="color:#555;padding:20px">No trips yet</p>'; }}
+
+// === FILLS CHART ===
 if (fills.length > 0) {{
   const coins = [...new Set(fills.map(f => f.coin))];
   const traces = coins.map(coin => {{
     const cf = fills.filter(f => f.coin === coin);
     return {{
-      x: cf.map(f => f.ts),
-      y: cf.map(f => f.price),
-      mode: 'markers',
-      name: coin,
+      x: cf.map(f => f.ts), y: cf.map(f => f.price),
+      mode: 'markers', name: coin,
       marker: {{
-        size: 8,
+        size: 7,
         color: cf.map(f => f.side === 'buy' || f.side === 'b' ? '#00ff88' : '#ff4444'),
         symbol: cf.map(f => f.side === 'buy' || f.side === 'b' ? 'triangle-up' : 'triangle-down'),
       }},
-      text: cf.map(f => `${{f.side.toUpperCase()}} ${{f.size}} @ $${{f.price}} fee=$${{f.fee.toFixed(4)}}`),
+      text: cf.map(f => `${{(f.side||'').toUpperCase()}} ${{f.size}} @ $${{f.price}}`),
     }};
   }});
   Plotly.newPlot('fills-chart', traces, {{
     paper_bgcolor: '#0a0a0f', plot_bgcolor: '#0a0a0f',
-    xaxis: {{color: '#666', gridcolor: '#1a1a2e'}},
-    yaxis: {{color: '#666', gridcolor: '#1a1a2e', title: 'Price ($)'}},
-    margin: {{l:60,r:20,t:10,b:40}},
-    legend: {{font: {{color: '#888'}}}},
+    xaxis: {{color: '#555', gridcolor: '#1a1a2e'}},
+    yaxis: {{color: '#555', gridcolor: '#1a1a2e', title: 'Price ($)'}},
+    margin: {{l:55,r:10,t:10,b:30}},
+    legend: {{font: {{color: '#666', size: 10}}}},
   }});
-}} else {{
-  document.getElementById('fills-chart').innerHTML = '<p style="color:#666;padding:20px">No fill data yet</p>';
-}}
+}} else {{ document.getElementById('fills-chart').innerHTML = '<p style="color:#555;padding:20px">No fills yet</p>'; }}
 
-// Vol surface — edge distribution if we have contexts, else portfolio over time
-if (contexts.length > 0) {{
-  const coins = [...new Set(contexts.map(c => c.coin))];
-  const traces = coins.map(coin => {{
-    const cc = contexts.filter(c => c.coin === coin);
-    return {{
-      x: cc.map(c => c.ts),
-      y: cc.map(c => c.edge_bps),
-      type: 'bar',
-      name: coin,
-      marker: {{color: cc.map(c => c.edge_bps >= 0 ? '#00ff88' : '#ff4444')}},
-    }};
-  }});
-  Plotly.newPlot('vol-surface', traces, {{
-    paper_bgcolor: '#0a0a0f', plot_bgcolor: '#0a0a0f',
-    xaxis: {{color: '#666', gridcolor: '#1a1a2e'}},
-    yaxis: {{color: '#666', gridcolor: '#1a1a2e', title: 'Edge (bps)'}},
-    margin: {{l:50,r:20,t:10,b:40}},
-    barmode: 'group',
-    legend: {{font: {{color: '#888'}}}},
-  }});
-}} else if (statuses.length > 0) {{
-  const validStatuses = statuses.filter(s => s.portfolio > 0);
-  Plotly.newPlot('vol-surface', [{{
-    x: validStatuses.map(s => s.ts),
-    y: validStatuses.map(s => s.portfolio),
-    type: 'scatter',
-    mode: 'lines',
-    line: {{color: '#4488ff', width: 2}},
-    fill: 'tozeroy',
-    fillcolor: 'rgba(68,136,255,0.1)',
+// === PORTFOLIO CHART ===
+const validStatuses = statuses.filter(s => s.portfolio > 0);
+if (validStatuses.length > 0) {{
+  Plotly.newPlot('portfolio-chart', [{{
+    x: validStatuses.map(s => s.ts), y: validStatuses.map(s => s.portfolio),
+    type: 'scatter', mode: 'lines', line: {{color: '#4488ff', width: 1.5}},
+    fill: 'tozeroy', fillcolor: 'rgba(68,136,255,0.06)',
   }}], {{
     paper_bgcolor: '#0a0a0f', plot_bgcolor: '#0a0a0f',
-    xaxis: {{color: '#666', gridcolor: '#1a1a2e'}},
-    yaxis: {{color: '#666', gridcolor: '#1a1a2e', title: 'Portfolio ($)'}},
-    margin: {{l:50,r:20,t:10,b:40}},
-    showlegend: false,
+    xaxis: {{color: '#555', gridcolor: '#1a1a2e'}},
+    yaxis: {{color: '#555', gridcolor: '#1a1a2e', title: 'Portfolio ($)'}},
+    margin: {{l:50,r:10,t:10,b:30}}, showlegend: false,
   }});
-}} else {{
-  document.getElementById('vol-surface').innerHTML = '<p style="color:#666;padding:20px">Collecting data... surface will appear after live fills</p>';
+}} else {{ document.getElementById('portfolio-chart').innerHTML = '<p style="color:#555;padding:20px">No portfolio data</p>'; }}
+
+// === REPLAY SLIDER ===
+const slider = document.getElementById('replay-slider');
+const timeDisplay = document.getElementById('replay-time');
+const stateDisplay = document.getElementById('replay-state');
+if (allEvents.length > 0) {{
+  slider.max = allEvents.length - 1;
+  slider.value = allEvents.length - 1;
+  function updateReplay(idx) {{
+    const e = allEvents[idx];
+    const ts = e.ts || '';
+    timeDisplay.textContent = ts.replace('T', ' ').substring(0, 19);
+    // Count state up to this point
+    const subset = allEvents.slice(0, idx + 1);
+    const nFills = subset.filter(x => x.type === 'fill').length;
+    const nTrips = subset.filter(x => x.type === 'trip').length;
+    const cumPnl = subset.filter(x => x.type === 'trip').reduce((s,x) => s + (x.pnl||0), 0);
+    stateDisplay.textContent = `Fills: ${{nFills}} | Trips: ${{nTrips}} | PnL: $${{cumPnl.toFixed(4)}}`;
+    // Highlight in timeline
+    document.querySelectorAll('.timeline .ev').forEach((el, i) => {{
+      el.classList.toggle('highlighted', i === allEvents.length - 1 - idx);
+    }});
+  }}
+  slider.addEventListener('input', () => updateReplay(parseInt(slider.value)));
+  updateReplay(allEvents.length - 1);
 }}
 
-// Timeline
+// === TIMELINE ===
 const timeline = document.getElementById('timeline');
-const recentEvents = allEvents.slice(-100).reverse();
-recentEvents.forEach(e => {{
+const recentEvents = allEvents.slice(-200).reverse();
+recentEvents.forEach((e, i) => {{
   const div = document.createElement('div');
   div.className = 'ev';
-  const ts = (e.ts || '').substring(11, 19) || '??:??:??';
+  const ts = (e.ts || '').substring(11, 19) || '??:??';
   const type = e.type || '?';
   let detail = '';
   if (type === 'fill') {{
     const arrow = e.side === 'buy' || e.side === 'b' ? '\\u25B2' : '\\u25BC';
     detail = `${{arrow}} ${{e.size}} ${{e.coin}} @ $${{e.price}} fee=$${{(e.fee||0).toFixed(4)}}`;
   }} else if (type === 'trip') {{
-    const sign = e.net_pnl >= 0 ? '+' : '';
-    detail = `#${{e.trip_num}} ${{e.coin}} ${{sign}}$${{(e.net_pnl||0).toFixed(4)}}`;
+    const sign = e.pnl >= 0 ? '+' : '';
+    detail = `#${{e.trip_num}} ${{e.coin}} ${{sign}}$${{(e.pnl||0).toFixed(4)}}`;
+  }} else if (type === 'risk') {{
+    detail = `${{e.coin}} ${{e.reason}}`;
+  }} else if (type === 'error') {{
+    detail = (e.message || '').substring(0, 60);
+  }} else if (type === 'bot_start') {{
+    detail = 'Session started';
+  }} else if (type === 'bot_stop') {{
+    detail = 'Session stopped';
   }}
   div.innerHTML = `<span class="ts">${{ts}}</span><span class="type ${{type}}">${{type}}</span><span>${{detail}}</span>`;
+  div.onclick = () => {{ slider.value = allEvents.length - 1 - i; updateReplay(parseInt(slider.value)); }};
   timeline.appendChild(div);
 }});
 
-// AI Insights
+// === AI INSIGHTS ===
 const insightsDiv = document.getElementById('insights');
 const rules = [];
 if (totalTrips > 5) {{
-  if (totalPnl < 0) rules.push(`NET NEGATIVE: avg trip PnL $${{(totalPnl/totalTrips).toFixed(4)}}. Strategy losing per round trip.`);
-  if (parseInt(wr) < 50) rules.push(`LOW WIN RATE: ${{wr}}%. Likely adverse selection or slow exits.`);
+  if (totalPnl < 0) rules.push({{ text: `NET NEGATIVE: avg trip PnL $${{(totalPnl/totalTrips).toFixed(4)}}. Strategy losing per round trip.`, bad: true }});
+  if (parseInt(wr) < 50) rules.push({{ text: `LOW WIN RATE: ${{wr}}%. Likely adverse selection or exit ladder too passive.`, bad: true }});
+  if (parseInt(wr) >= 60) rules.push({{ text: `GOOD WIN RATE: ${{wr}}%.`, bad: false }});
 }}
 const totalFees = fills.reduce((s,f) => s + Math.abs(f.fee), 0);
 if (totalVolume > 0) {{
   const feeBps = totalFees / totalVolume * 10000;
-  if (feeBps > 3) rules.push(`HIGH FEES: ${{feeBps.toFixed(1)}}bps avg. Fees eating spread capture.`);
+  if (feeBps > 3) rules.push({{ text: `HIGH FEES: ${{feeBps.toFixed(1)}}bps avg. Fees eating spread capture.`, bad: true }});
 }}
+if (totalRisks > 10) rules.push({{ text: `FREQUENT RISK BLOCKS: ${{totalRisks}} pauses. Bot spending too much time in cooldown.`, bad: true }});
 if (contexts.length > 5) {{
   const avgEdge = contexts.reduce((s,c) => s + c.edge_bps, 0) / contexts.length;
-  if (avgEdge < 0) rules.push(`NEGATIVE EDGE: avg ${{avgEdge.toFixed(1)}}bps. Adverse selection detected.`);
+  if (avgEdge < 0) rules.push({{ text: `NEGATIVE EDGE: avg ${{avgEdge.toFixed(1)}}bps. Adverse selection detected.`, bad: true }});
+  else rules.push({{ text: `POSITIVE EDGE: avg ${{avgEdge.toFixed(1)}}bps.`, bad: false }});
 }}
-if (rules.length === 0) rules.push('Collecting data... insights will appear after more fills and trips.');
+// Per-coin analysis
+const coinTrips = {{}};
+trips.forEach(t => {{ coinTrips[t.coin] = coinTrips[t.coin] || []; coinTrips[t.coin].push(t); }});
+Object.entries(coinTrips).forEach(([coin, ts]) => {{
+  if (ts.length >= 3) {{
+    const coinPnl = ts.reduce((s,t) => s + (t.net_pnl||0), 0);
+    const coinWr = ts.filter(t => t.net_pnl >= 0).length / ts.length * 100;
+    if (coinPnl < -0.01) rules.push({{ text: `WEAK: ${{coin}} — ${{ts.length}} trips, PnL $${{coinPnl.toFixed(4)}}, WR ${{coinWr.toFixed(0)}}%`, bad: true }});
+  }}
+}});
+if (rules.length === 0) rules.push({{ text: 'Collecting data... insights appear after fills and trips.', bad: false }});
 rules.forEach(r => {{
   const d = document.createElement('div');
-  d.className = 'insight';
-  d.textContent = r;
+  d.className = 'insight' + (r.bad ? '' : ' good');
+  d.textContent = r.text;
   insightsDiv.appendChild(d);
 }});
 </script>
