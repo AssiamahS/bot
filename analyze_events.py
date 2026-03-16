@@ -686,7 +686,7 @@ const recentEvents = allEvents.slice(-200).reverse();
 recentEvents.forEach((e, i) => {{
   const div = document.createElement('div');
   div.className = 'ev';
-  const ts = (e.ts || '').substring(11, 19) || '??:??';
+  const ts = (e.ts || '').replace('T',' ').substring(0, 16) || '??';
   const type = e.type || '?';
   let detail = '';
   if (type === 'fill') {{
