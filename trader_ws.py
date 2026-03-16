@@ -432,7 +432,7 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
 
     p_dec = PRICE_DECIMALS.get(coin, 2)
     s_dec = SIZE_DECIMALS.get(coin, 2)
-    tick = 10 ** -p_dec
+    tick = TICK_SIZES.get(coin, 10 ** -p_dec)
 
     # Base spread
     market_spread = book["spread"]
