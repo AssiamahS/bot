@@ -39,7 +39,7 @@ WATCH_PATTERNS=("*.py" "*.json" "*.env" "*.md" "*.toml" "*.yaml" "*.yml" "*.cfg"
 
 # Files to IGNORE (don't trigger snapshots for these)
 # NOTE: fswatch --exclude uses POSIX extended regex, not globs
-IGNORE_PATTERNS=("trader_status\\.json" "perf_journal\\.jsonl" "\\.git" "__pycache__" "\\.pyc$" "\\.log$" "\\.DS_Store")
+IGNORE_PATTERNS=("trader_status\\.json" "perf_journal\\.jsonl" "\\.git" "__pycache__" "\\.pyc$" "\\.log$" "\\.DS_Store" "hummingbot-api")
 
 # === COLORS ===
 RED='\033[0;31m'
@@ -214,8 +214,10 @@ process_changes() {
     local perf
     perf=$(snapshot_perf)
 
-    # Stage and commit
-    git add -A
+    # Stage only the real changed files (avoid submodules, journal, etc)
+    while IFS= read -r f; do
+        git add -- "$f" 2>/dev/null || true
+    done <<< "$real_changes"
 
     # Exclude perf_journal.jsonl from the diff stat (it changes every time)
     local commit_msg
