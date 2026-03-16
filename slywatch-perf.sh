@@ -116,23 +116,17 @@ format_commit_msg() {
     local changed_files="$1"
     local perf_json="$2"
 
-    # Get git diff stats for changed files
-    local diff_stat=""
+    # Get git diff stats from staged (cached) changes
     cd "$WATCH_DIR"
     local added=0
     local removed=0
-    for f in $changed_files; do
-        if [ -f "$f" ]; then
-            local stat
-            stat=$(git diff --numstat -- "$f" 2>/dev/null || echo "0 0")
-            local a r
-            a=$(echo "$stat" | awk '{s+=$1} END {print s+0}')
-            r=$(echo "$stat" | awk '{s+=$2} END {print s+0}')
-            added=$((added + a))
-            removed=$((removed + r))
-        fi
-    done
-    diff_stat="+${added}/-${removed}"
+    local stat
+    stat=$(git diff --cached --numstat 2>/dev/null || echo "")
+    if [ -n "$stat" ]; then
+        added=$(echo "$stat" | awk '{s+=$1} END {print s+0}')
+        removed=$(echo "$stat" | awk '{s+=$2} END {print s+0}')
+    fi
+    local diff_stat="+${added}/-${removed}"
 
     # Build commit message
     local file_list
