@@ -163,13 +163,13 @@ def compute_fair_price(coin: str) -> Optional[float]:
     flow_bps = compute_trade_flow(coin)
     flow_shift = mid * flow_bps / 10000
 
-    # Inventory skew
+    # Inventory skew (normalized by max position, not raw USD)
     pos = positions.get(coin, {})
     pos_size = pos.get("size", 0)
-    pos_usd = pos_size * mid  # signed
-    inv_penalty = pos_usd * SKEW_PER_UNIT_BPS / 10000
+    pos_ratio = (pos_size * mid) / MAX_POSITION_USD if MAX_POSITION_USD > 0 else 0
+    inv_shift = pos_ratio * SKEW_PER_UNIT_BPS * mid / 10000
 
-    fair = micro + flow_shift - inv_penalty
+    fair = micro + flow_shift - inv_shift
     return fair
 
 
