@@ -459,6 +459,14 @@ def generate_surface_html(events, output_path=None):
 
 <div class="replay-bar">
   <label>Replay</label>
+  <div class="range-btns" id="range-btns">
+    <button data-range="all" class="active">ALL</button>
+    <button data-range="1m">1M</button>
+    <button data-range="1w">1W</button>
+    <button data-range="1d">1D</button>
+    <button data-range="6h">6H</button>
+    <button data-range="1h">1H</button>
+  </div>
   <input type="range" id="replay-slider" min="0" max="100" value="100">
   <span class="time-display" id="replay-time">--</span>
   <span class="state-display" id="replay-state"></span>
