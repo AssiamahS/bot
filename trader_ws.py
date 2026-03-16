@@ -54,6 +54,8 @@ FLOW_WINDOW_SECS = 5.0        # trade flow lookback
 FLOW_ALPHA_BPS = 1.0           # max bps shift from trade flow
 MAX_POSITION_USD = 40.0        # max exposure per coin
 QUOTE_COOLDOWN_MS = 150        # min ms between quote updates per coin
+MOMENTUM_WINDOW = 0.8          # seconds lookback for microprice velocity
+MOMENTUM_THRESHOLD_BPS = 2.0   # pause quoting if velocity exceeds this
 
 COIN_MAP = {
     "BTC-PERP": "BTC",
