@@ -818,11 +818,14 @@ def main():
                     if mp:
                         flow = compute_trade_flow(coin)
                         vel = compute_micro_velocity(coin, mp.get("mid", 1))
+                        mode = inventory_mode.get(coin, "neutral")
+                        age = time.time() - inventory_entered_at.get(coin, time.time()) if mode != "neutral" else 0
+                        mode_str = f" [{mode} {age:.0f}s]" if mode != "neutral" else ""
                         print(f"  {coin} micro=${mp.get('micro', 0):.2f} "
                               f"sig={mp.get('signal_bps', 0):+.1f}bps "
                               f"flow={flow:+.1f}bps "
                               f"vel={vel:+.1f}bps "
-                              f"pos={pos_size:+.3f}")
+                              f"pos={pos_size:+.3f}{mode_str}")
 
                 elapsed = (time.time() - start_time) / 60
                 print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | {elapsed:.1f}m")
