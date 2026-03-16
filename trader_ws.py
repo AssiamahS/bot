@@ -589,17 +589,32 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     sell_oid = None
 
     # Place buy if allowed
+    ioc_filled = False
     if quote_bid and bid_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size <= 0):
-        # Use IOC for taker exits (crossing spread), ALO for maker quotes
         is_taker_exit = use_taker and mode == "short_exit"
         buy_oid = place_order(exchange, coin, True, bid_size, bid_price,
                               taker=is_taker_exit, reduce_only=is_taker_exit)
+        if buy_oid == -1:
+            ioc_filled = True
+            buy_oid = None
 
     # Place sell if allowed
     if quote_ask and ask_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size >= 0):
         is_taker_exit = use_taker and mode == "long_exit"
         sell_oid = place_order(exchange, coin, False, ask_size, ask_price,
                                taker=is_taker_exit, reduce_only=is_taker_exit)
+        if sell_oid == -1:
+            ioc_filled = True
+            sell_oid = None
+
+    # After IOC taker exit fills, immediately reset local inventory state
+    # so the bot stops trying to exit a position that no longer exists
+    if ioc_filled:
+        print(f"  [{coin}] IOC exit filled — resetting inventory state")
+        with _lock:
+            positions[coin] = {"size": 0, "entry_price": 0, "unrealized_pnl": 0}
+        inventory_mode[coin] = "neutral"
+        inventory_entered_at.pop(coin, None)
 
     active_oids[coin] = {
         "buy_oid": buy_oid,
