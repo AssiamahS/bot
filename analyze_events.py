@@ -398,7 +398,7 @@ def generate_surface_html(events, output_path=None):
         "fee": e.get("fee", 0), "pnl": e.get("closed_pnl", e.get("net_pnl", 0)),
         "reason": e.get("reason", ""), "trip_num": e.get("trip_num", 0),
         "message": e.get("message", ""),
-    } for e in all_events[-500:]])
+    } for e in all_events])
 
     html = f"""<!DOCTYPE html>
 <html>
