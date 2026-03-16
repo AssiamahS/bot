@@ -626,12 +626,35 @@ def place_order(exchange: Exchange, coin: str, is_buy: bool, size: float, price:
             reduce_only=reduce_only,
         )
         if isinstance(result, str):
+            print(f"  Order rejected: {result}")
             return None
         resp = result.get("response", {}) if isinstance(result, dict) else {}
         data = resp.get("data", {}) if isinstance(resp, dict) else {}
         statuses = data.get("statuses", []) if isinstance(data, dict) else []
-        if statuses and isinstance(statuses[0], dict) and "resting" in statuses[0]:
-            return statuses[0]["resting"]["oid"]
+
+        if not statuses:
+            return None
+
+        status = statuses[0] if isinstance(statuses[0], dict) else {}
+
+        # Resting order (normal ALO)
+        if "resting" in status:
+            return status["resting"]["oid"]
+
+        # Filled immediately (IOC taker exits)
+        if "filled" in status:
+            filled = status["filled"]
+            oid = filled.get("oid", 0)
+            side_str = "BUY" if is_buy else "SELL"
+            print(f"  IOC FILLED: {side_str} {size} {coin} @ ${price} (oid={oid})")
+            tg_send(f"⚡ <b>IOC EXIT</b>: {side_str} {size} {coin} @ ${price}")
+            # IOC fills have no resting order — return negative to signal "done"
+            return -1
+
+        # Error
+        if "error" in status:
+            print(f"  Order rejected: {status['error']}")
+
     except Exception as e:
         print(f"  Order error: {e}")
     return None
