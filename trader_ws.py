@@ -894,6 +894,45 @@ def setup_exchange():
     return info, exchange, address
 
 
+def discover_tick_sizes(info: Info):
+    """Discover tick sizes and size decimals from exchange metadata + live book."""
+    print("  Discovering tick sizes...")
+    try:
+        meta = info.meta()
+        for asset in meta.get("universe", []):
+            name = asset["name"]
+            sz_dec = asset.get("szDecimals", 2)
+            SIZE_DECIMALS[name] = sz_dec
+
+        # Derive price decimals from live orderbook (most reliable)
+        for pair in PAIRS:
+            coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
+            try:
+                l2 = info.l2_snapshot(coin)
+                bids = l2["levels"][0][:10]
+                asks = l2["levels"][1][:10]
+                prices = [float(b["px"]) for b in bids] + [float(a["px"]) for a in asks]
+                prices.sort()
+                diffs = [round(prices[i+1] - prices[i], 10)
+                         for i in range(len(prices) - 1)
+                         if prices[i+1] != prices[i]]
+                if diffs:
+                    min_tick = min(diffs)
+                    TICK_SIZES[coin] = min_tick
+                    # Derive price decimals from tick
+                    tick_str = f"{min_tick:.10f}".rstrip("0")
+                    if "." in tick_str:
+                        p_dec = len(tick_str.split(".")[1])
+                    else:
+                        p_dec = 0
+                    PRICE_DECIMALS[coin] = p_dec
+                    print(f"    {coin}: tick={min_tick} priceDec={p_dec} sizeDec={SIZE_DECIMALS.get(coin, '?')}")
+            except Exception as e:
+                print(f"    {coin}: tick discovery failed ({e}), using fallback")
+    except Exception as e:
+        print(f"  Metadata fetch failed: {e}")
+
+
 def subscribe_streams(info: Info, address: str):
     """Subscribe to WS streams for all pairs."""
     for pair in PAIRS:
