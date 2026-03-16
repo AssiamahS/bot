@@ -90,6 +90,8 @@ active_oids: Dict[str, dict] = {}          # coin -> {buy_oid, sell_oid, buy_px,
 last_quote_ts: Dict[str, float] = {}       # coin -> last quote time (ms)
 positions: Dict[str, dict] = {}            # coin -> {size, entry_price, unrealized_pnl}
 micro_history: Dict[str, deque] = {}       # coin -> deque of (timestamp, microprice)
+inventory_entered_at: Dict[str, float] = {}  # coin -> timestamp when position became non-zero
+inventory_mode: Dict[str, str] = {}          # coin -> "neutral" | "long_exit" | "short_exit"
 
 _lock = threading.Lock()
 
