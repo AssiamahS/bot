@@ -58,11 +58,20 @@ MOMENTUM_WINDOW = 0.8          # seconds lookback for microprice velocity
 MOMENTUM_THRESHOLD_BPS = 2.0   # pause quoting if velocity exceeds this
 
 # Exit-mode state machine
-EXIT_MODE_POSITION_USD = 15.0  # switch to exit mode above this inventory
-EXIT_SPREAD_TIGHTEN = 0.5     # multiply exit-side half_spread by this (tighter)
-EXIT_ENTRY_SPREAD_WIDEN = 2.0  # multiply entry-side half_spread by this (wider)
-MAX_INVENTORY_AGE_SECS = 20.0  # after this, escalate exit aggressiveness
-STALE_INVENTORY_TIGHTEN = 0.3  # multiply exit spread by this when inventory is stale
+EXIT_MODE_POSITION_USD = 12.0  # switch to exit mode above this inventory (lowered from 15)
+EXIT_ENTRY_SPREAD_WIDEN = 2.5  # multiply entry-side half_spread by this (wider, discourage adds)
+
+# Time-based exit escalation ladder
+# Each tier: (max_age_secs, exit_spread_mult, entry_size_mult, description)
+# exit_spread_mult: multiplier on half_spread for exit side (lower = tighter = more aggressive)
+# entry_size_mult: multiplier on entry side size (0 = disabled)
+EXIT_ESCALATION = [
+    (5,   0.5,  0.3,  "normal_exit"),      # 0-5s:   half spread, 30% entry size
+    (15,  0.25, 0.0,  "tight_exit"),        # 5-15s:  quarter spread, no entry
+    (30,  0.0,  0.0,  "join_best"),         # 15-30s: join best bid/ask, no entry
+    (60,  -0.5, 0.0,  "cross_spread"),      # 30-60s: cross spread (become taker), no entry
+    (999, -1.0, 0.0,  "emergency_cross"),   # 60s+:   aggressive taker cross
+]
 
 COIN_MAP = {
     "BTC-PERP": "BTC",
