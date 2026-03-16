@@ -332,8 +332,47 @@ def trigger_reprice(coin: str, reason: str = ""):
 reprice_queue: deque = deque(maxlen=100)
 
 
+def update_inventory_mode(coin: str, pos_size: float, mid: float):
+    """Update the inventory regime: neutral / long_exit / short_exit."""
+    pos_usd = pos_size * mid  # signed
+    abs_usd = abs(pos_usd)
+    now = time.time()
+
+    prev_mode = inventory_mode.get(coin, "neutral")
+
+    if abs_usd < EXIT_MODE_POSITION_USD * 0.3:
+        # Near flat — reset to neutral
+        new_mode = "neutral"
+        if prev_mode != "neutral":
+            age = now - inventory_entered_at.get(coin, now)
+            print(f"  [{coin}] FLATTENED after {age:.1f}s -> neutral")
+        inventory_entered_at.pop(coin, None)
+    elif pos_usd > 0 and abs_usd >= EXIT_MODE_POSITION_USD:
+        new_mode = "long_exit"
+        if prev_mode != "long_exit":
+            inventory_entered_at.setdefault(coin, now)
+            print(f"  [{coin}] LONG EXIT mode (${abs_usd:.0f})")
+    elif pos_usd < 0 and abs_usd >= EXIT_MODE_POSITION_USD:
+        new_mode = "short_exit"
+        if prev_mode != "short_exit":
+            inventory_entered_at.setdefault(coin, now)
+            print(f"  [{coin}] SHORT EXIT mode (${abs_usd:.0f})")
+    else:
+        # Between 30% and 100% of threshold — keep current mode or neutral
+        new_mode = prev_mode if prev_mode != "neutral" else "neutral"
+
+    inventory_mode[coin] = new_mode
+    return new_mode
+
+
 def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, reason: str = ""):
-    """Cancel stale orders and place new quotes at fair price."""
+    """Cancel stale orders and place new quotes at fair price.
+
+    Operates in two regimes:
+      neutral:    two-sided quoting with microprice + flow + momentum
+      long_exit:  tighten ask, widen/disable bid, prioritize flattening
+      short_exit: tighten bid, widen/disable ask, prioritize flattening
+    """
     global last_quote_ts
 
     # Read shared state under lock
@@ -354,17 +393,21 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     if market_spread_bps < MIN_SPREAD_BPS:
         return
 
-    # Momentum filter: skew quotes during fast moves instead of full pause
+    pos_size = pos.get("size", 0)
+    pos_usd = abs(pos_size) * mid
+
+    # Update inventory regime
+    mode = update_inventory_mode(coin, pos_size, mid)
+
+    # Momentum filter: skew quotes during fast moves
     velocity_bps = compute_micro_velocity(coin, mid)
     quote_bid = True
     quote_ask = True
 
     if velocity_bps > MOMENTUM_THRESHOLD_BPS:
-        # Price moving up fast — ask side is toxic, only quote bids
         quote_ask = False
         print(f"  [{coin}] Momentum UP {velocity_bps:+.2f}bps -> bids only")
     elif velocity_bps < -MOMENTUM_THRESHOLD_BPS:
-        # Price moving down fast — bid side is toxic, only quote asks
         quote_bid = False
         print(f"  [{coin}] Momentum DOWN {velocity_bps:+.2f}bps -> asks only")
 
@@ -375,31 +418,72 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     p_dec = PRICE_DECIMALS.get(coin, 2)
     s_dec = SIZE_DECIMALS.get(coin, 2)
 
-    # Position check
-    pos_size = pos.get("size", 0)
-    pos_usd = abs(pos_size) * mid
-
-    # Volatility-adaptive spread: use spread of book as floor
+    # Base spread
     market_spread = book["spread"]
     min_spread = mid * MIN_SPREAD_BPS / 10000
     half_spread = max(min_spread / 2, market_spread / 2)
 
+    # ─── Regime-specific spread adjustments ───
+    bid_half = half_spread
+    ask_half = half_spread
+    bid_size_mult = 1.0
+    ask_size_mult = 1.0
+
+    # Inventory age escalation
+    inv_age = time.time() - inventory_entered_at.get(coin, time.time())
+    stale_inventory = inv_age > MAX_INVENTORY_AGE_SECS
+
+    if mode == "long_exit":
+        # Tighten ask (exit side), widen bid (entry side)
+        exit_tighten = STALE_INVENTORY_TIGHTEN if stale_inventory else EXIT_SPREAD_TIGHTEN
+        ask_half *= exit_tighten
+        bid_half *= EXIT_ENTRY_SPREAD_WIDEN
+        bid_size_mult = 0.0 if stale_inventory else 0.3  # reduce/disable entry side
+        if stale_inventory:
+            quote_bid = False
+            print(f"  [{coin}] STALE LONG {inv_age:.0f}s -> aggressive ask, no bid")
+
+    elif mode == "short_exit":
+        # Tighten bid (exit side), widen ask (entry side)
+        exit_tighten = STALE_INVENTORY_TIGHTEN if stale_inventory else EXIT_SPREAD_TIGHTEN
+        bid_half *= exit_tighten
+        ask_half *= EXIT_ENTRY_SPREAD_WIDEN
+        ask_size_mult = 0.0 if stale_inventory else 0.3  # reduce/disable entry side
+        if stale_inventory:
+            quote_ask = False
+            print(f"  [{coin}] STALE SHORT {inv_age:.0f}s -> aggressive bid, no ask")
+
     # Quote prices
-    bid_price = round(fair - half_spread, p_dec)
-    ask_price = round(fair + half_spread, p_dec)
+    bid_price = round(fair - bid_half, p_dec)
+    ask_price = round(fair + ask_half, p_dec)
 
     # Clamp to not cross the book
     bid_price = min(bid_price, round(book["best_bid"], p_dec))
     ask_price = max(ask_price, round(book["best_ask"], p_dec))
 
-    # Size
-    size = round(ORDER_SIZE_USD / mid, s_dec)
-    if size * mid < 10.0:
-        size = round(10.5 / mid, s_dec)
+    # Size (with exit-mode multipliers)
+    base_size = round(ORDER_SIZE_USD / mid, s_dec)
+    if base_size * mid < 10.0:
+        base_size = round(10.5 / mid, s_dec)
+
+    bid_size = round(base_size * bid_size_mult, s_dec) if bid_size_mult > 0 else 0
+    ask_size = round(base_size * ask_size_mult, s_dec) if ask_size_mult > 0 else 0
+
+    # In exit mode, exit side uses actual position size for clean flatten
+    if mode == "long_exit" and pos_size > 0:
+        ask_size = round(abs(pos_size), s_dec)
+    elif mode == "short_exit" and pos_size < 0:
+        bid_size = round(abs(pos_size), s_dec)
+
+    # Minimum notional check
+    if bid_size > 0 and bid_size * mid < 10.0:
+        bid_size = round(10.5 / mid, s_dec)
+    if ask_size > 0 and ask_size * mid < 10.0:
+        ask_size = round(10.5 / mid, s_dec)
 
     # Check if existing orders are still close enough
     existing = active_oids.get(coin, {})
-    if existing:
+    if existing and mode == "neutral":
         old_bid = existing.get("buy_px", 0)
         old_ask = existing.get("sell_px", 0)
         bid_move = abs(bid_price - old_bid) / mid * 10000 if old_bid else 999
@@ -407,6 +491,7 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
 
         if bid_move < REPRICE_THRESHOLD_BPS and ask_move < REPRICE_THRESHOLD_BPS:
             return  # no material change, skip
+    # In exit mode, always reprice (urgency)
 
     # Cancel existing orders for this coin
     cancel_coin_orders(exchange, info, address, coin)
@@ -416,26 +501,31 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     flow_bps = compute_trade_flow(coin)
     inv_skew = pos_size * mid / MAX_POSITION_USD if MAX_POSITION_USD > 0 else 0
 
-    sides_str = "BID+ASK"
-    if not quote_bid:
-        sides_str = "ASK only"
-    elif not quote_ask:
-        sides_str = "BID only"
+    sides_parts = []
+    if quote_bid and bid_size > 0:
+        sides_parts.append("BID")
+    if quote_ask and ask_size > 0:
+        sides_parts.append("ASK")
+    sides_str = "+".join(sides_parts) if sides_parts else "NONE"
+
+    mode_tag = f" <{mode}>" if mode != "neutral" else ""
+    age_tag = f" age={inv_age:.0f}s" if mode != "neutral" else ""
 
     print(f"  [{coin}] REPRICE ({reason}) fair=${fair:.{p_dec}f} "
-          f"micro={signal_bps:+.1f}bps flow={flow_bps:+.1f}bps vel={velocity_bps:+.1f}bps inv={inv_skew:+.2f} [{sides_str}]")
-    print(f"    BID ${bid_price:.{p_dec}f} | ASK ${ask_price:.{p_dec}f} | size={size}")
+          f"micro={signal_bps:+.1f}bps flow={flow_bps:+.1f}bps vel={velocity_bps:+.1f}bps "
+          f"inv={inv_skew:+.2f}{mode_tag}{age_tag} [{sides_str}]")
+    print(f"    BID ${bid_price:.{p_dec}f} x{bid_size} | ASK ${ask_price:.{p_dec}f} x{ask_size}")
 
     buy_oid = None
     sell_oid = None
 
-    # Place buy if not over-long AND not momentum-blocked
-    if quote_bid and (pos_usd < MAX_POSITION_USD or pos_size <= 0):
-        buy_oid = place_order(exchange, coin, True, size, bid_price)
+    # Place buy if allowed
+    if quote_bid and bid_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size <= 0):
+        buy_oid = place_order(exchange, coin, True, bid_size, bid_price)
 
-    # Place sell if not over-short AND not momentum-blocked
-    if quote_ask and (pos_usd < MAX_POSITION_USD or pos_size >= 0):
-        sell_oid = place_order(exchange, coin, False, size, ask_price)
+    # Place sell if allowed
+    if quote_ask and ask_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size >= 0):
+        sell_oid = place_order(exchange, coin, False, ask_size, ask_price)
 
     active_oids[coin] = {
         "buy_oid": buy_oid,
