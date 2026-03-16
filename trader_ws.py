@@ -681,6 +681,52 @@ def check_fills(info: Info, address: str):
 
 # ─── Status Writer ────────────────────────────────────────────────────────────
 
+def compute_flatten_stats() -> dict:
+    """Compute flatten time percentiles and PnL-by-holding-time buckets."""
+    if not round_trips:
+        return {
+            "avg_hold_secs": 0, "median_hold_secs": 0,
+            "p95_hold_secs": 0, "avg_trip_net": 0,
+            "pnl_by_hold_time": {},
+        }
+
+    hold_times = sorted(t["hold_secs"] for t in round_trips)
+    n = len(hold_times)
+
+    avg_hold = sum(hold_times) / n
+    median_hold = hold_times[n // 2]
+    p95_hold = hold_times[int(n * 0.95)] if n >= 2 else hold_times[-1]
+    avg_net = sum(t["net"] for t in round_trips) / n
+
+    # PnL bucketed by holding time
+    buckets = {"<5s": [], "5-20s": [], ">20s": []}
+    for t in round_trips:
+        h = t["hold_secs"]
+        if h < 5:
+            buckets["<5s"].append(t["net"])
+        elif h <= 20:
+            buckets["5-20s"].append(t["net"])
+        else:
+            buckets[">20s"].append(t["net"])
+
+    pnl_by_hold = {}
+    for bucket, nets in buckets.items():
+        if nets:
+            pnl_by_hold[bucket] = {
+                "count": len(nets),
+                "avg_net": round(sum(nets) / len(nets), 6),
+                "total_net": round(sum(nets), 6),
+            }
+
+    return {
+        "avg_hold_secs": round(avg_hold, 1),
+        "median_hold_secs": round(median_hold, 1),
+        "p95_hold_secs": round(p95_hold, 1),
+        "avg_trip_net": round(avg_net, 6),
+        "pnl_by_hold_time": pnl_by_hold,
+    }
+
+
 def write_status():
     """Write status JSON for dashboard."""
     pv = last_balances.get("account_value", 0)
