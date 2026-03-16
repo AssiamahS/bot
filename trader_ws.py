@@ -871,7 +871,11 @@ def main():
                               f"pos={pos_size:+.3f}{mode_str}")
 
                 elapsed = (time.time() - start_time) / 60
-                print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | {elapsed:.1f}m")
+                trips = len(round_trips)
+                comp_ratio = trips / (total_trade_count / 2) if total_trade_count >= 2 else 0
+                avg_hold = sum(t["hold_secs"] for t in round_trips) / trips if trips else 0
+                print(f"  Portfolio: ${pv:.2f} | Fills: {total_trade_count} | Trips: {trips} "
+                      f"({comp_ratio:.0%}) | Avg hold: {avg_hold:.1f}s | {elapsed:.1f}m")
 
             if cycle % 120 == 0:
                 # Telegram status every ~60s
