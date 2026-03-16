@@ -79,8 +79,10 @@ COIN_MAP = {
     "SOL-PERP": "SOL",
 }
 
+# Fallback decimals — overridden at startup from exchange metadata
 SIZE_DECIMALS = {"BTC": 5, "ETH": 4, "SOL": 2}
 PRICE_DECIMALS = {"BTC": 0, "ETH": 1, "SOL": 2}
+TICK_SIZES: Dict[str, float] = {}  # populated from live orderbook at startup
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
 
