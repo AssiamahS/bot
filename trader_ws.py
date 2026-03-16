@@ -967,6 +967,9 @@ def main():
 
     info, exchange, address = setup_exchange()
 
+    # Discover tick sizes from exchange before anything else
+    discover_tick_sizes(info)
+
     # Initial account state
     refresh_account(info, address)
     pv = last_balances.get("account_value", 0)
