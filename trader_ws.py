@@ -47,13 +47,13 @@ TG_TOKEN = config.get("tg_token", "")
 TG_CHAT_ID = config.get("tg_chat_id", "")
 
 # Tuning
-REPRICE_THRESHOLD_BPS = 1.5   # reprice when microprice moves more than this
+REPRICE_THRESHOLD_BPS = 0.6   # reprice when microprice moves more than this
 STALE_ORDER_MS = 10_000       # cancel orders older than this if not repriced
-SKEW_PER_UNIT_BPS = 0.5       # inventory penalty per $1 of position
+SKEW_PER_UNIT_BPS = 0.5       # inventory penalty as ratio of max position
 FLOW_WINDOW_SECS = 5.0        # trade flow lookback
 FLOW_ALPHA_BPS = 1.0           # max bps shift from trade flow
 MAX_POSITION_USD = 40.0        # max exposure per coin
-QUOTE_COOLDOWN_MS = 200        # min ms between quote updates per coin
+QUOTE_COOLDOWN_MS = 150        # min ms between quote updates per coin
 
 COIN_MAP = {
     "BTC-PERP": "BTC",
