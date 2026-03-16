@@ -703,9 +703,11 @@ def main():
                     pos_size = pos.get("size", 0)
                     if mp:
                         flow = compute_trade_flow(coin)
+                        vel = compute_micro_velocity(coin, mp.get("mid", 1))
                         print(f"  {coin} micro=${mp.get('micro', 0):.2f} "
                               f"sig={mp.get('signal_bps', 0):+.1f}bps "
                               f"flow={flow:+.1f}bps "
+                              f"vel={vel:+.1f}bps "
                               f"pos={pos_size:+.3f}")
 
                 elapsed = (time.time() - start_time) / 60
