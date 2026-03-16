@@ -401,16 +401,16 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     if mid <= 0:
         return
 
-    # Spread profitability gate: don't quote if spread < min profitable
-    market_spread_bps = (book["spread"] / mid) * 10000 if mid > 0 else 0
-    if market_spread_bps < MIN_SPREAD_BPS:
-        return
-
     pos_size = pos.get("size", 0)
     pos_usd = abs(pos_size) * mid
 
     # Update inventory regime
     mode = update_inventory_mode(coin, pos_size, mid)
+
+    # Spread profitability gate: skip for neutral only (exit mode always quotes)
+    market_spread_bps = (book["spread"] / mid) * 10000 if mid > 0 else 0
+    if mode == "neutral" and market_spread_bps < MIN_SPREAD_BPS:
+        return
 
     # Momentum filter: skew quotes during fast moves
     velocity_bps = compute_micro_velocity(coin, mid)
@@ -430,49 +430,93 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
 
     p_dec = PRICE_DECIMALS.get(coin, 2)
     s_dec = SIZE_DECIMALS.get(coin, 2)
+    tick = 10 ** -p_dec
 
     # Base spread
     market_spread = book["spread"]
     min_spread = mid * MIN_SPREAD_BPS / 10000
     half_spread = max(min_spread / 2, market_spread / 2)
 
-    # ─── Regime-specific spread adjustments ───
+    # ─── Regime-specific spread via escalation ladder ───
     bid_half = half_spread
     ask_half = half_spread
     bid_size_mult = 1.0
     ask_size_mult = 1.0
-
-    # Inventory age escalation
     inv_age = time.time() - inventory_entered_at.get(coin, time.time())
-    stale_inventory = inv_age > MAX_INVENTORY_AGE_SECS
+    escalation_tier = "neutral"
+    use_taker = False  # whether exit crosses spread
 
-    if mode == "long_exit":
-        # Tighten ask (exit side), widen bid (entry side)
-        exit_tighten = STALE_INVENTORY_TIGHTEN if stale_inventory else EXIT_SPREAD_TIGHTEN
-        ask_half *= exit_tighten
-        bid_half *= EXIT_ENTRY_SPREAD_WIDEN
-        bid_size_mult = 0.0 if stale_inventory else 0.3  # reduce/disable entry side
-        if stale_inventory:
-            quote_bid = False
-            print(f"  [{coin}] STALE LONG {inv_age:.0f}s -> aggressive ask, no bid")
+    if mode in ("long_exit", "short_exit"):
+        # Find escalation tier based on inventory age
+        exit_mult = 0.5
+        entry_mult = 0.3
+        for max_age, spread_mult, entry_size_mult, tier_name in EXIT_ESCALATION:
+            if inv_age <= max_age:
+                exit_mult = spread_mult
+                entry_mult = entry_size_mult
+                escalation_tier = tier_name
+                break
 
-    elif mode == "short_exit":
-        # Tighten bid (exit side), widen ask (entry side)
-        exit_tighten = STALE_INVENTORY_TIGHTEN if stale_inventory else EXIT_SPREAD_TIGHTEN
-        bid_half *= exit_tighten
-        ask_half *= EXIT_ENTRY_SPREAD_WIDEN
-        ask_size_mult = 0.0 if stale_inventory else 0.3  # reduce/disable entry side
-        if stale_inventory:
-            quote_ask = False
-            print(f"  [{coin}] STALE SHORT {inv_age:.0f}s -> aggressive bid, no ask")
+        # Negative spread_mult means cross the spread (taker exit)
+        if exit_mult <= 0:
+            use_taker = True
 
-    # Quote prices
+        if mode == "long_exit":
+            # Exit side = ask (sell to flatten)
+            if use_taker:
+                ask_half = exit_mult * half_spread  # negative = inside spread
+            else:
+                ask_half = half_spread * exit_mult
+            bid_half = half_spread * EXIT_ENTRY_SPREAD_WIDEN
+            bid_size_mult = entry_mult
+            if entry_mult == 0:
+                quote_bid = False
+        else:  # short_exit
+            # Exit side = bid (buy to flatten)
+            if use_taker:
+                bid_half = exit_mult * half_spread  # negative = inside spread
+            else:
+                bid_half = half_spread * exit_mult
+            ask_half = half_spread * EXIT_ENTRY_SPREAD_WIDEN
+            ask_size_mult = entry_mult
+            if entry_mult == 0:
+                quote_ask = False
+
+        print(f"  [{coin}] EXIT {escalation_tier} age={inv_age:.0f}s mult={exit_mult}")
+
+    # ─── Quote prices ───
     bid_price = round(fair - bid_half, p_dec)
     ask_price = round(fair + ask_half, p_dec)
 
-    # Clamp to not cross the book
-    bid_price = min(bid_price, round(book["best_bid"], p_dec))
-    ask_price = max(ask_price, round(book["best_ask"], p_dec))
+    # ─── Queue position management ───
+    # In neutral mode with momentum, step back 1 tick from best to avoid
+    # being the first picked off during trends (queue-aware quoting)
+    if mode == "neutral":
+        if velocity_bps > 0.5:
+            # Upward pressure: step ask back 1 tick behind best
+            ask_price = max(ask_price, round(book["best_ask"] + tick, p_dec))
+        elif velocity_bps < -0.5:
+            # Downward pressure: step bid back 1 tick behind best
+            bid_price = min(bid_price, round(book["best_bid"] - tick, p_dec))
+
+        # Normal clamp: don't cross the book
+        bid_price = min(bid_price, round(book["best_bid"], p_dec))
+        ask_price = max(ask_price, round(book["best_ask"], p_dec))
+
+    elif use_taker:
+        # Taker exit: cross the spread to flatten immediately
+        if mode == "long_exit":
+            # Sell at or below best bid to guarantee fill
+            ask_price = round(book["best_bid"] - tick, p_dec)
+            print(f"  [{coin}] TAKER EXIT: sell @ ${ask_price:.{p_dec}f} (crossing spread)")
+        else:
+            # Buy at or above best ask to guarantee fill
+            bid_price = round(book["best_ask"] + tick, p_dec)
+            print(f"  [{coin}] TAKER EXIT: buy @ ${bid_price:.{p_dec}f} (crossing spread)")
+    else:
+        # Exit mode but not yet taker: clamp normally
+        bid_price = min(bid_price, round(book["best_bid"], p_dec))
+        ask_price = max(ask_price, round(book["best_ask"], p_dec))
 
     # Size (with exit-mode multipliers)
     base_size = round(ORDER_SIZE_USD / mid, s_dec)
