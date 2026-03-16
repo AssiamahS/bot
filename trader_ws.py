@@ -345,6 +345,12 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     if market_spread_bps < MIN_SPREAD_BPS:
         return
 
+    # Toxicity gate: pause quoting when microprice is moving fast
+    velocity_bps = compute_micro_velocity(coin, mid)
+    if abs(velocity_bps) > MOMENTUM_THRESHOLD_BPS:
+        print(f"  [{coin}] Toxic flow detected {velocity_bps:+.2f}bps -> pause quoting")
+        return
+
     fair = compute_fair_price(coin)
     if fair is None:
         return
