@@ -82,6 +82,7 @@ trade_flow: Dict[str, deque] = {}          # coin -> deque of (timestamp, signed
 active_oids: Dict[str, dict] = {}          # coin -> {buy_oid, sell_oid, buy_px, sell_px, ts}
 last_quote_ts: Dict[str, float] = {}       # coin -> last quote time (ms)
 positions: Dict[str, dict] = {}            # coin -> {size, entry_price, unrealized_pnl}
+micro_history: Dict[str, deque] = {}       # coin -> deque of (timestamp, microprice)
 
 _lock = threading.Lock()
 
