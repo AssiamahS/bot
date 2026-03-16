@@ -769,6 +769,8 @@ function setRange(range) {{
   slider.value = filteredEvents.length - 1;
   buildTimeline();
   updateReplay(filteredEvents.length - 1);
+  // Rebuild all charts for this range
+  renderAll(range);
   // Update range info
   if (filteredEvents.length > 0) {{
     const first = filteredEvents[0].ts.replace('T',' ').substring(0,16);
