@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# perf-stat test line
 """
 Hyperliquid Market Maker.
 Maker fee is 1.5bps at low volume tiers (rebate only at 25M+ monthly).
