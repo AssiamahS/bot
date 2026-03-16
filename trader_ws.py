@@ -565,7 +565,7 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
         sides_parts.append("ASK")
     sides_str = "+".join(sides_parts) if sides_parts else "NONE"
 
-    mode_tag = f" <{mode}>" if mode != "neutral" else ""
+    mode_tag = f" <{escalation_tier}>" if mode != "neutral" else ""
     age_tag = f" age={inv_age:.0f}s" if mode != "neutral" else ""
 
     print(f"  [{coin}] REPRICE ({reason}) fair=${fair:.{p_dec}f} "
@@ -578,11 +578,16 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
 
     # Place buy if allowed
     if quote_bid and bid_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size <= 0):
-        buy_oid = place_order(exchange, coin, True, bid_size, bid_price)
+        # Use IOC for taker exits (crossing spread), ALO for maker quotes
+        is_taker_exit = use_taker and mode == "short_exit"
+        buy_oid = place_order(exchange, coin, True, bid_size, bid_price,
+                              taker=is_taker_exit, reduce_only=is_taker_exit)
 
     # Place sell if allowed
     if quote_ask and ask_size > 0 and (pos_usd < MAX_POSITION_USD or pos_size >= 0):
-        sell_oid = place_order(exchange, coin, False, ask_size, ask_price)
+        is_taker_exit = use_taker and mode == "long_exit"
+        sell_oid = place_order(exchange, coin, False, ask_size, ask_price,
+                               taker=is_taker_exit, reduce_only=is_taker_exit)
 
     active_oids[coin] = {
         "buy_oid": buy_oid,
