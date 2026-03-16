@@ -77,6 +77,16 @@ COIN_MAP = {
     "BTC-PERP": "BTC",
     "ETH-PERP": "ETH",
     "SOL-PERP": "SOL",
+    "HYPE-PERP": "HYPE",
+    "DYDX-PERP": "DYDX",
+    "PURR-PERP": "PURR",
+    "FET-PERP": "FET",
+    "TAO-PERP": "TAO",
+    "LINK-PERP": "LINK",
+    "XRP-PERP": "XRP",
+    "SUI-PERP": "SUI",
+    "DOGE-PERP": "DOGE",
+    "TRUMP-PERP": "TRUMP",
 }
 
 # Fallback decimals — overridden at startup from exchange metadata
