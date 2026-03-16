@@ -548,6 +548,7 @@ def write_status():
             "signal_bps": round(mp["signal_bps"], 2),
             "imbalance": round(mp["imbalance"], 4),
             "flow_bps": round(compute_trade_flow(coin), 2),
+            "velocity_bps": round(compute_micro_velocity(coin, mp["mid"]) if mp["mid"] > 0 else 0, 2),
         }
 
     pair_status = {}
