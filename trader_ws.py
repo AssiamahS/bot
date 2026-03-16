@@ -678,6 +678,8 @@ def write_status():
             "entry_price": pos.get("entry_price", 0),
             "microprice": round(mp.get("micro", 0), 6),
             "signal_bps": round(mp.get("signal_bps", 0), 2),
+            "mode": inventory_mode.get(coin, "neutral"),
+            "inventory_age_s": round(time.time() - inventory_entered_at.get(coin, time.time()), 1) if inventory_mode.get(coin, "neutral") != "neutral" else 0,
         }
 
     oids = []
