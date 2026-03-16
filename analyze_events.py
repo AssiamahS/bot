@@ -423,11 +423,15 @@ def generate_surface_html(events, output_path=None):
   .chart {{ width: 100%; height: 340px; }}
   .chart-tall {{ width: 100%; height: 420px; }}
   .full-width {{ grid-column: 1 / -1; }}
-  .replay-bar {{ padding: 10px 20px; background: #0d0d14; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; display: flex; align-items: center; gap: 16px; }}
+  .replay-bar {{ padding: 10px 20px; background: #0d0d14; border-top: 1px solid #1a1a2e; border-bottom: 1px solid #1a1a2e; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
   .replay-bar label {{ color: #555; font-size: 11px; text-transform: uppercase; }}
-  .replay-bar input[type=range] {{ flex: 1; accent-color: #00ff88; }}
+  .replay-bar input[type=range] {{ flex: 1; accent-color: #00ff88; min-width: 200px; }}
   .replay-bar .time-display {{ color: #00ff88; min-width: 160px; font-size: 12px; }}
   .replay-bar .state-display {{ color: #888; font-size: 11px; }}
+  .range-btns {{ display: flex; gap: 4px; }}
+  .range-btns button {{ background: #1a1a2e; color: #888; border: 1px solid #2a2a3e; padding: 4px 10px; font-size: 11px; font-family: inherit; cursor: pointer; border-radius: 3px; }}
+  .range-btns button.active {{ background: #00ff88; color: #0a0a0f; border-color: #00ff88; font-weight: bold; }}
+  .range-btns button:hover {{ border-color: #00ff88; }}
   .insights {{ padding: 12px 20px; border-top: 1px solid #1a1a2e; }}
   .insights h3 {{ font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }}
   .insight {{ padding: 6px 10px; margin: 3px 0; background: #111; border-left: 3px solid #ff8800; font-size: 12px; }}
