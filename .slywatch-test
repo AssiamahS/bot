@@ -1,1 +1,1 @@
-MIN_SPREAD_BPS = 20  # perf test
+MIN_SPREAD_BPS = 25  # e2e test
