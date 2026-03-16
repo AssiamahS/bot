@@ -297,30 +297,34 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     """Cancel stale orders and place new quotes at fair price."""
     global last_quote_ts
 
-    fair = compute_fair_price(coin)
-    if fair is None:
+    # Read shared state under lock
+    with _lock:
+        book = book_state.get(coin)
+        mp = microprice_state.get(coin, {})
+        pos = positions.get(coin, {})
+
+    if not book or not mp:
         return
 
-    book = book_state.get(coin)
-    if not book:
-        return
-
-    mp = microprice_state.get(coin, {})
     mid = mp.get("mid", 0)
     if mid <= 0:
+        return
+
+    # Spread profitability gate: don't quote if spread < min profitable
+    market_spread_bps = (book["spread"] / mid) * 10000 if mid > 0 else 0
+    if market_spread_bps < MIN_SPREAD_BPS:
+        return
+
+    fair = compute_fair_price(coin)
+    if fair is None:
         return
 
     p_dec = PRICE_DECIMALS.get(coin, 2)
     s_dec = SIZE_DECIMALS.get(coin, 2)
 
     # Position check
-    pos = positions.get(coin, {})
     pos_size = pos.get("size", 0)
     pos_usd = abs(pos_size) * mid
-
-    if pos_usd >= MAX_POSITION_USD:
-        # Only place reducing orders
-        pass
 
     # Volatility-adaptive spread: use spread of book as floor
     market_spread = book["spread"]
