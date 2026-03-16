@@ -93,6 +93,10 @@ micro_history: Dict[str, deque] = {}       # coin -> deque of (timestamp, microp
 inventory_entered_at: Dict[str, float] = {}  # coin -> timestamp when position became non-zero
 inventory_mode: Dict[str, str] = {}          # coin -> "neutral" | "long_exit" | "short_exit"
 
+# Round-trip tracking
+round_trips: List[dict] = []       # completed trips: {coin, entry_time, exit_time, hold_secs, pnl}
+prev_positions: Dict[str, float] = {}  # coin -> previous pos_size for detecting flattens
+
 _lock = threading.Lock()
 
 
