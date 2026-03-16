@@ -607,6 +607,38 @@ def refresh_account(info: Info, address: str):
                     "unrealized_pnl": float(p.get("unrealizedPnl", 0)),
                 }
 
+        # Detect round-trip completions (position went non-zero -> ~zero)
+        now = time.time()
+        for coin, new_pos in new_positions.items():
+            new_size = new_pos["size"]
+            old_size = prev_positions.get(coin, 0)
+
+            if abs(old_size) > 0 and abs(new_size) < abs(old_size) * 0.1:
+                # Position flattened (or nearly)
+                entry_time = inventory_entered_at.get(coin, now)
+                hold_secs = now - entry_time
+                # Get realized PnL from recent fills for this coin
+                recent_coin_fills = [f for f in all_fills
+                                     if coin in f.get("pair", "") and f["time"] > entry_time]
+                trip_pnl = sum(f.get("closed_pnl", 0) for f in recent_coin_fills)
+                trip_fees = sum(f.get("fee", 0) for f in recent_coin_fills)
+
+                round_trips.append({
+                    "coin": coin,
+                    "entry_time": entry_time,
+                    "exit_time": now,
+                    "hold_secs": round(hold_secs, 1),
+                    "pnl": round(trip_pnl, 6),
+                    "fees": round(trip_fees, 6),
+                    "net": round(trip_pnl - trip_fees, 6),
+                })
+                print(f"  [{coin}] ROUND TRIP #{len(round_trips)} completed | "
+                      f"hold={hold_secs:.1f}s pnl=${trip_pnl:.4f} fees=${trip_fees:.4f} net=${trip_pnl - trip_fees:.4f}")
+                tg_send(f"✅ <b>Round Trip #{len(round_trips)}</b> {coin}\n"
+                        f"Hold: {hold_secs:.1f}s | Net: ${trip_pnl - trip_fees:.4f}")
+
+            prev_positions[coin] = new_size
+
         with _lock:
             positions.update(new_positions)
 
