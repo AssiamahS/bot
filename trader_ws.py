@@ -345,11 +345,19 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     if market_spread_bps < MIN_SPREAD_BPS:
         return
 
-    # Toxicity gate: pause quoting when microprice is moving fast
+    # Momentum filter: skew quotes during fast moves instead of full pause
     velocity_bps = compute_micro_velocity(coin, mid)
-    if abs(velocity_bps) > MOMENTUM_THRESHOLD_BPS:
-        print(f"  [{coin}] Toxic flow detected {velocity_bps:+.2f}bps -> pause quoting")
-        return
+    quote_bid = True
+    quote_ask = True
+
+    if velocity_bps > MOMENTUM_THRESHOLD_BPS:
+        # Price moving up fast — ask side is toxic, only quote bids
+        quote_ask = False
+        print(f"  [{coin}] Momentum UP {velocity_bps:+.2f}bps -> bids only")
+    elif velocity_bps < -MOMENTUM_THRESHOLD_BPS:
+        # Price moving down fast — bid side is toxic, only quote asks
+        quote_bid = False
+        print(f"  [{coin}] Momentum DOWN {velocity_bps:+.2f}bps -> asks only")
 
     fair = compute_fair_price(coin)
     if fair is None:
@@ -399,19 +407,25 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     flow_bps = compute_trade_flow(coin)
     inv_skew = pos_size * mid / MAX_POSITION_USD if MAX_POSITION_USD > 0 else 0
 
+    sides_str = "BID+ASK"
+    if not quote_bid:
+        sides_str = "ASK only"
+    elif not quote_ask:
+        sides_str = "BID only"
+
     print(f"  [{coin}] REPRICE ({reason}) fair=${fair:.{p_dec}f} "
-          f"micro={signal_bps:+.1f}bps flow={flow_bps:+.1f}bps inv={inv_skew:+.2f}")
+          f"micro={signal_bps:+.1f}bps flow={flow_bps:+.1f}bps vel={velocity_bps:+.1f}bps inv={inv_skew:+.2f} [{sides_str}]")
     print(f"    BID ${bid_price:.{p_dec}f} | ASK ${ask_price:.{p_dec}f} | size={size}")
 
     buy_oid = None
     sell_oid = None
 
-    # Place buy if not over-long
-    if pos_usd < MAX_POSITION_USD or pos_size <= 0:
+    # Place buy if not over-long AND not momentum-blocked
+    if quote_bid and (pos_usd < MAX_POSITION_USD or pos_size <= 0):
         buy_oid = place_order(exchange, coin, True, size, bid_price)
 
-    # Place sell if not over-short
-    if pos_usd < MAX_POSITION_USD or pos_size >= 0:
+    # Place sell if not over-short AND not momentum-blocked
+    if quote_ask and (pos_usd < MAX_POSITION_USD or pos_size >= 0):
         sell_oid = place_order(exchange, coin, False, size, ask_price)
 
     active_oids[coin] = {
