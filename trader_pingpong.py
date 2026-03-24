@@ -19,24 +19,38 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 
-# Telegram alerts
-TG_TOKEN = "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU"
-TG_CHAT_ID = "8727843043"
-
-def tg_send(msg):
-    try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
-        urllib.request.urlopen(url, data=data, timeout=5)
-    except Exception:
-        pass
-
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
 
 # Load config
-with open(CONFIG_FILE) as f:
-    config = json.load(f)
+try:
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    print(f"FATAL: Config file not found: {CONFIG_FILE}")
+    print("  Copy config.example.json to config.json and fill in your keys.")
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"FATAL: Invalid JSON in {CONFIG_FILE}: {e}")
+    sys.exit(1)
+
+if "wallet_private_key" not in config:
+    print("FATAL: Missing 'wallet_private_key' in config.json")
+    sys.exit(1)
+
+# Telegram alerts (from config, not hardcoded)
+TG_TOKEN = config.get("tg_token", "")
+TG_CHAT_ID = config.get("tg_chat_id", "")
+
+def tg_send(msg):
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
+        urllib.request.urlopen(url, data=data, timeout=5)
+    except Exception as e:
+        sys.stderr.write(f"  tg_send failed: {e}\n")
 
 PRIVATE_KEY = config["wallet_private_key"]
 WALLET_ADDRESS = config.get("wallet_address", "")
@@ -52,6 +66,16 @@ COIN_MAP = {
     "BTC-PERP": "BTC",
     "ETH-PERP": "ETH",
     "SOL-PERP": "SOL",
+    "HYPE-PERP": "HYPE",
+    "DYDX-PERP": "DYDX",
+    "PURR-PERP": "PURR",
+    "FET-PERP": "FET",
+    "TAO-PERP": "TAO",
+    "LINK-PERP": "LINK",
+    "XRP-PERP": "XRP",
+    "SUI-PERP": "SUI",
+    "DOGE-PERP": "DOGE",
+    "TRUMP-PERP": "TRUMP",
 }
 
 # Size decimals per asset (Hyperliquid requires specific precision)
@@ -241,8 +265,8 @@ def get_account_state(info, address):
                 for b in spot.get("balances", []):
                     if b["coin"] == "USDC" and float(b["total"]) > 0:
                         spot_usdc = float(b["total"])
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  Spot balance check error: {e}")
 
             total_value = perps_value + spot_usdc
 
@@ -285,8 +309,8 @@ def cancel_all_orders(exchange, info, address):
                 oid = order.get("oid", 0)
                 try:
                     exchange.cancel(coin, oid)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  Cancel order {oid} failed: {e}")
             print(f"  Cancelled {len(open_orders)} orders")
             return len(open_orders)
     except Exception as e:
@@ -436,8 +460,8 @@ def write_status():
     try:
         with open(STATUS_FILE, "w") as f:
             json.dump(status, f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  Status write error: {e}")
 
 
 def get_open_orders_by_coin(info, address):
@@ -535,12 +559,17 @@ def run_cycle(info, exchange, address):
 
         if pos_size == 0 and not has_buy and not has_sell:
             # STATE: FLAT, NO ORDERS -> Place initial buy at best bid
-            buy_price = round(best_bid, p_dec)
-            print(f"  PING: Place BUY @ ${buy_price:.{p_dec}f} (waiting for entry)")
-            oid = place_order(exchange, coin, True, size, buy_price)
-            if oid:
-                open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
-                                   "size": size, "buy_oid": oid}
+            # Guard: skip if we already have an in-flight order tracked in open_grid
+            grid_state = open_grid.get(coin, {}).get("state", "")
+            if grid_state == "waiting_buy" and open_grid[coin].get("buy_oid"):
+                print(f"  {coin} | Buy order in-flight (oid={open_grid[coin]['buy_oid']}), skipping")
+            else:
+                buy_price = round(best_bid, p_dec)
+                print(f"  PING: Place BUY @ ${buy_price:.{p_dec}f} (waiting for entry)")
+                oid = place_order(exchange, coin, True, size, buy_price)
+                if oid:
+                    open_grid[coin] = {"state": "waiting_buy", "buy_price": buy_price,
+                                       "size": size, "buy_oid": oid}
 
         elif pos_size > 0 and not has_sell:
             # STATE: LONG, NO SELL -> Buy filled! Place take-profit sell
@@ -556,7 +585,7 @@ def run_cycle(info, exchange, address):
                 for o in coin_orders:
                     if o.get("side") == "B":
                         try: exchange.cancel(coin, o["oid"])
-                        except: pass
+                        except Exception as e: print(f"  Cancel {o.get('oid')} failed: {e}")
 
         elif pos_size < 0 and not has_buy:
             # STATE: SHORT, NO BUY -> Sell filled! Place take-profit buy
@@ -570,7 +599,7 @@ def run_cycle(info, exchange, address):
                 for o in coin_orders:
                     if o.get("side") == "A":
                         try: exchange.cancel(coin, o["oid"])
-                        except: pass
+                        except Exception as e: print(f"  Cancel {o.get('oid')} failed: {e}")
 
         elif pos_size == 0 and (has_buy or has_sell):
             # STATE: FLAT BUT HAVE ORDERS -> A round trip just completed!
@@ -580,7 +609,7 @@ def run_cycle(info, exchange, address):
             # Cancel leftover orders
             for o in coin_orders:
                 try: exchange.cancel(coin, o["oid"])
-                except: pass
+                except Exception as e: print(f"  Cancel {o.get('oid')} failed: {e}")
             # Place fresh buy
             buy_price = round(best_bid, p_dec)
             oid = place_order(exchange, coin, True, size, buy_price)
@@ -601,7 +630,7 @@ def run_cycle(info, exchange, address):
                         if distance_bps > 50:
                             print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
                             try: exchange.cancel(coin, o["oid"])
-                            except: pass
+                            except Exception as e: print(f"  Cancel {o.get('oid')} failed: {e}")
                             tp_price = round(entry_price + target_spread, p_dec)
                             tp_price = round(max(tp_price, entry_price + mid * MIN_SPREAD_BPS / 10000), p_dec)
                             place_order(exchange, coin, False, abs(pos_size), tp_price, reduce_only=True)
@@ -616,7 +645,7 @@ def run_cycle(info, exchange, address):
                         if distance_bps > 50:
                             print(f"  TP stale ({distance_bps:.0f}bps from mid), re-placing closer")
                             try: exchange.cancel(coin, o["oid"])
-                            except: pass
+                            except Exception as e: print(f"  Cancel {o.get('oid')} failed: {e}")
                             tp_price = round(entry_price - target_spread, p_dec)
                             place_order(exchange, coin, True, abs(pos_size), tp_price, reduce_only=True)
                         else:

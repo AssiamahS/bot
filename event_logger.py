@@ -45,8 +45,14 @@ def parse_telegram_fill(msg: str, date: str) -> Optional[dict]:
         msg, re.DOTALL
     )
     if not m:
-        return None
-    side_raw, size, coin, price, fee, pnl = m.groups()
+        # Fallback: try simpler pattern for format variations
+        m = re.search(r'FILL.*?(\w+)\s+([\d.]+)\s+(\w+).*?@\s*\$([\d.]+)', msg, re.DOTALL)
+        if not m:
+            return {"type": "fill", "ts": date, "raw_parse_failed": True, "raw": msg[:200]}
+        side_raw, size, coin, price = m.groups()
+        fee, pnl = "0", "0"
+    else:
+        side_raw, size, coin, price, fee, pnl = m.groups()
     # 'A' = sell (Ask side), 'B' = buy (Bid side), or full words
     side = side_raw.upper()
     if side in ('A', 'SELL', 'S'):
@@ -186,19 +192,19 @@ def classify_telegram(msg: str) -> str:
     """Classify a telegram message into event type."""
     if 'FILL' in msg:
         return 'fill'
-    if 'Bot Started' in msg or 'Kraken Bot Started' in msg or 'HL Bot Started' in msg:
+    elif 'Bot Started' in msg or 'Kraken Bot Started' in msg or 'HL Bot Started' in msg:
         return 'bot_start'
-    if 'Bot Stopped' in msg or 'Stopped' in msg:
+    elif 'Bot Stopped' in msg or 'Stopped' in msg:
         return 'bot_stop'
-    if 'connected' in msg.lower() and 'bot' in msg.lower():
+    elif 'connected' in msg.lower() and 'bot' in msg.lower():
         return 'bot_connect'
-    if 'HL Status' in msg or 'Status Update' in msg:
+    elif 'HL Status' in msg or 'Status Update' in msg:
         return 'status'
-    if 'RISK' in msg:
+    elif 'RISK' in msg:
         return 'risk'
-    if 'Trip' in msg or 'Round Trip' in msg:
+    elif 'Trip' in msg or 'Round Trip' in msg:
         return 'trip'
-    if 'Error' in msg:
+    elif 'Error' in msg:
         return 'error'
     return 'other'
 
@@ -361,6 +367,24 @@ class EventLogger:
         self._write(data)
 
 
+TS_DISPLAY_LEN = 19  # "2026-03-07T05:47:35" — trim fractional seconds + tz for display
+
+
+def read_jsonl(path: str) -> list[dict]:
+    """Read a JSONL file, skipping blank lines and parse errors."""
+    records = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
+
+
 # ─── Build unified timeline ──────────────────────────────────────────────────
 
 def normalize_ts(ts_str: str) -> str:
@@ -387,33 +411,23 @@ def build_timeline(telegram_path: str = None, perf_path: str = None,
     if telegram_path and os.path.exists(telegram_path):
         print(f"Reading telegram: {telegram_path}")
         count = 0
-        with open(telegram_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                record = json.loads(line)
-                event = parse_telegram_message(record)
-                if event:
-                    event["ts"] = normalize_ts(event.get("ts", ""))
-                    events.append(event)
-                    count += 1
+        for record in read_jsonl(telegram_path):
+            event = parse_telegram_message(record)
+            if event:
+                event["ts"] = normalize_ts(event.get("ts", ""))
+                events.append(event)
+                count += 1
         print(f"  -> {count} events from telegram")
 
     # 2. Slywatch perf journal
     if perf_path and os.path.exists(perf_path):
         print(f"Reading perf_journal: {perf_path}")
         count = 0
-        with open(perf_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                record = json.loads(line)
-                event = parse_perf_journal_entry(record)
-                event["ts"] = normalize_ts(event.get("ts", ""))
-                events.append(event)
-                count += 1
+        for record in read_jsonl(perf_path):
+            event = parse_perf_journal_entry(record)
+            event["ts"] = normalize_ts(event.get("ts", ""))
+            events.append(event)
+            count += 1
         print(f"  -> {count} events from slywatch")
 
     # 3. Existing events.jsonl (live events, append mode)
@@ -421,15 +435,10 @@ def build_timeline(telegram_path: str = None, perf_path: str = None,
     if os.path.exists(output_path):
         print(f"Reading existing events: {output_path}")
         count = 0
-        with open(output_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                event = json.loads(line)
-                if event.get("source") == "live":
-                    events.append(event)
-                    count += 1
+        for event in read_jsonl(output_path):
+            if event.get("source") == "live":
+                events.append(event)
+                count += 1
         print(f"  -> {count} existing live events preserved")
 
     # Sort by timestamp
@@ -455,6 +464,34 @@ def build_timeline(telegram_path: str = None, perf_path: str = None,
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
+def print_type_source_breakdown(source_counts: dict, type_counts: dict):
+    """Print source and type breakdown tables."""
+    print()
+    print("  By source:")
+    for s, c in sorted(source_counts.items()):
+        print(f"    {s:20s} {c:>6d}")
+    print()
+    print("  By type:")
+    for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
+        print(f"    {t:20s} {c:>6d}")
+
+
+def print_fill_stats(events: list):
+    """Print fill statistics from events."""
+    fills = [e for e in events if e.get("type") == "fill"]
+    if not fills:
+        return
+    total_cost = sum(e.get("cost", 0) for e in fills)
+    total_fees = sum(e.get("fee", 0) for e in fills)
+    total_pnl = sum(e.get("closed_pnl", 0) for e in fills)
+    print()
+    print(f"  Fill stats:")
+    print(f"    Total fills:   {len(fills)}")
+    print(f"    Total volume:  ${total_cost:,.2f}")
+    print(f"    Total fees:    ${total_fees:.4f}")
+    print(f"    Total PnL:     ${total_pnl:.4f}")
+
+
 def show_summary(input_path: str = None):
     """Print a summary of the event timeline."""
     path = input_path or EVENTS_FILE
@@ -462,18 +499,13 @@ def show_summary(input_path: str = None):
         print(f"No events file at {path}")
         return
 
-    events = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                events.append(json.loads(line))
+    events = read_jsonl(path)
 
     if not events:
         print("No events found.")
         return
 
-    # Count by type
+    # Count by type and source
     type_counts = {}
     source_counts = {}
     for e in events:
@@ -489,40 +521,22 @@ def show_summary(input_path: str = None):
     print(f"  Event Timeline Summary")
     print(f"{'='*60}")
     print(f"  Total events: {len(events)}")
-    print(f"  Date range:   {first_ts[:19]} -> {last_ts[:19]}")
-    print()
-    print("  By source:")
-    for s, c in sorted(source_counts.items()):
-        print(f"    {s:20s} {c:>6d}")
-    print()
-    print("  By type:")
-    for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
-        print(f"    {t:20s} {c:>6d}")
+    print(f"  Date range:   {first_ts[:TS_DISPLAY_LEN]} -> {last_ts[:TS_DISPLAY_LEN]}")
 
-    # Key stats from fills
-    fills = [e for e in events if e.get("type") == "fill"]
-    if fills:
-        total_cost = sum(e.get("cost", 0) for e in fills)
-        total_fees = sum(e.get("fee", 0) for e in fills)
-        total_pnl = sum(e.get("closed_pnl", 0) for e in fills)
-        print()
-        print(f"  Fill stats:")
-        print(f"    Total fills:   {len(fills)}")
-        print(f"    Total volume:  ${total_cost:,.2f}")
-        print(f"    Total fees:    ${total_fees:.4f}")
-        print(f"    Total PnL:     ${total_pnl:.4f}")
+    print_type_source_breakdown(source_counts, type_counts)
+    print_fill_stats(events)
 
     # Bot sessions
-    starts = [e for e in events if e.get("type") == "bot_start"]
-    stops = [e for e in events if e.get("type") == "bot_stop"]
+    starts = sum(1 for e in events if e.get("type") == "bot_start")
+    stops = sum(1 for e in events if e.get("type") == "bot_stop")
     print()
-    print(f"  Bot sessions: {len(starts)} starts, {len(stops)} stops")
+    print(f"  Bot sessions: {starts} starts, {stops} stops")
 
     # Latest portfolio
     statuses = [e for e in events if e.get("type") in ("status", "slywatch_snapshot") and e.get("portfolio")]
     if statuses:
         latest = statuses[-1]
-        print(f"  Latest portfolio: ${latest.get('portfolio', 0):.2f} (as of {latest.get('ts', '?')[:19]})")
+        print(f"  Latest portfolio: ${latest.get('portfolio', 0):.2f} (as of {latest.get('ts', '?')[:TS_DISPLAY_LEN]})")
 
     print(f"{'='*60}")
 

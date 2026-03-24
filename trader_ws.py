@@ -32,8 +32,22 @@ from hyperliquid.utils import constants
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
 
-with open(CONFIG_FILE) as f:
-    config = json.load(f)
+try:
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    print(f"FATAL: Config file not found: {CONFIG_FILE}")
+    print("  Copy config.example.json to config.json and fill in your keys.")
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"FATAL: Invalid JSON in {CONFIG_FILE}: {e}")
+    sys.exit(1)
+
+_REQUIRED_KEYS = ["wallet_private_key"]
+_missing = [k for k in _REQUIRED_KEYS if k not in config]
+if _missing:
+    print(f"FATAL: Missing required config keys: {', '.join(_missing)}")
+    sys.exit(1)
 
 PRIVATE_KEY = config["wallet_private_key"]
 WALLET_ADDRESS = config.get("wallet_address", "")
@@ -128,8 +142,8 @@ def tg_send(msg):
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
         urllib.request.urlopen(url, data=data, timeout=5)
-    except Exception:
-        pass
+    except Exception as e:
+        sys.stderr.write(f"  tg_send failed: {e}\n")
 
 
 def signal_handler(sig, frame):
@@ -167,20 +181,22 @@ def compute_microprice(best_bid: float, best_ask: float, bid_size: float, ask_si
 def compute_trade_flow(coin: str) -> float:
     """Compute net trade flow signal in bps from recent trades.
     Positive = net buying pressure, negative = net selling."""
-    if coin not in trade_flow:
-        return 0.0
+    with _lock:
+        if coin not in trade_flow:
+            return 0.0
 
-    now = time.time()
-    flow = trade_flow[coin]
+        now = time.time()
+        flow = trade_flow[coin]
 
-    # Purge old entries
-    while flow and (now - flow[0][0]) > FLOW_WINDOW_SECS:
-        flow.popleft()
+        # Purge old entries
+        while flow and (now - flow[0][0]) > FLOW_WINDOW_SECS:
+            flow.popleft()
 
-    if not flow:
-        return 0.0
+        if not flow:
+            return 0.0
 
-    net_signed_usd = sum(signed_usd for _, signed_usd in flow)
+        net_signed_usd = sum(signed_usd for _, signed_usd in flow)
+
     # Normalize: cap at FLOW_ALPHA_BPS
     # Use ORDER_SIZE_USD as reference scale
     raw = (net_signed_usd / ORDER_SIZE_USD) * FLOW_ALPHA_BPS
@@ -209,9 +225,10 @@ def compute_micro_velocity(coin: str, mid: float) -> float:
     return ((new_micro - old_micro) / mid) * 10000
 
 
-def compute_fair_price(coin: str) -> Optional[float]:
-    """Compute fair price = microprice + trade_flow - inventory_skew."""
-    mp = microprice_state.get(coin)
+def compute_fair_price(coin: str, mp_snapshot: dict = None, pos_snapshot: dict = None) -> Optional[float]:
+    """Compute fair price = microprice + trade_flow - inventory_skew.
+    Accepts optional snapshots to avoid re-reading shared state without lock."""
+    mp = mp_snapshot if mp_snapshot else microprice_state.get(coin)
     if not mp:
         return None
 
@@ -223,7 +240,7 @@ def compute_fair_price(coin: str) -> Optional[float]:
     flow_shift = mid * flow_bps / 10000
 
     # Inventory skew (normalized by max position, not raw USD)
-    pos = positions.get(coin, {})
+    pos = pos_snapshot if pos_snapshot else positions.get(coin, {})
     pos_size = pos.get("size", 0)
     pos_ratio = (pos_size * mid) / MAX_POSITION_USD if MAX_POSITION_USD > 0 else 0
     inv_shift = pos_ratio * SKEW_PER_UNIT_BPS * mid / 10000
@@ -266,7 +283,7 @@ def on_l2_book(msg: dict):
 
             # Update microprice
             mp = compute_microprice(best_bid, best_ask, bid_size, ask_size)
-            prev_mp = microprice_state.get(coin, {})
+            prev_micro = microprice_state.get(coin, {}).get("micro", 0)
             microprice_state[coin] = mp
 
             # Record microprice history for momentum/velocity
@@ -274,8 +291,7 @@ def on_l2_book(msg: dict):
                 micro_history[coin] = deque(maxlen=50)
             micro_history[coin].append((time.time(), mp["micro"]))
 
-        # Check if we need to reprice
-        prev_micro = prev_mp.get("micro", 0)
+        # Check if we need to reprice (prev_micro captured under lock)
         if prev_micro > 0:
             move_bps = abs(mp["micro"] - prev_micro) / prev_micro * 10000
             if move_bps >= REPRICE_THRESHOLD_BPS:
@@ -295,15 +311,16 @@ def on_trades(msg: dict):
         coin = trades[0]["coin"]
         now = time.time()
 
-        if coin not in trade_flow:
-            trade_flow[coin] = deque(maxlen=500)
+        with _lock:
+            if coin not in trade_flow:
+                trade_flow[coin] = deque(maxlen=500)
 
-        for t in trades:
-            px = float(t["px"])
-            sz = float(t["sz"])
-            side = t["side"]  # "B" = buy, "A" = sell
-            signed_usd = px * sz if side == "B" else -(px * sz)
-            trade_flow[coin].append((now, signed_usd))
+            for t in trades:
+                px = float(t["px"])
+                sz = float(t["sz"])
+                side = t["side"]  # "B" = buy, "A" = sell
+                signed_usd = px * sz if side == "B" else -(px * sz)
+                trade_flow[coin].append((now, signed_usd))
 
     except Exception as e:
         print(f"  [WS] trades error: {e}")
@@ -325,7 +342,8 @@ def on_order_updates(msg: dict):
 
             if status == "filled":
                 global total_trade_count
-                total_trade_count += 1
+                with _lock:
+                    total_trade_count += 1
                 side_str = "BUY" if side == "B" else "SELL"
                 print(f"  >>> FILL: {side_str} {sz} {coin} @ ${px:.2f}")
                 tg_send(f"{'🟢' if side == 'B' else '🔴'} <b>FILL</b>: {side_str} {sz} {coin} @ ${px:.2f}")
@@ -400,11 +418,12 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
     """
     global last_quote_ts
 
-    # Read shared state under lock
+    # Snapshot shared state under lock (deep copy dicts so WS callbacks
+    # can't mutate them while we calculate quotes)
     with _lock:
-        book = book_state.get(coin)
-        mp = microprice_state.get(coin, {})
-        pos = positions.get(coin, {})
+        book = dict(book_state.get(coin, {})) if book_state.get(coin) else None
+        mp = dict(microprice_state.get(coin, {}))
+        pos = dict(positions.get(coin, {}))
 
     if not book or not mp:
         return
@@ -436,7 +455,7 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
         quote_bid = False
         print(f"  [{coin}] Momentum DOWN {velocity_bps:+.2f}bps -> asks only")
 
-    fair = compute_fair_price(coin)
+    fair = compute_fair_price(coin, mp_snapshot=mp, pos_snapshot=pos)
     if fair is None:
         return
 
@@ -607,14 +626,29 @@ def execute_reprice(coin: str, exchange: Exchange, info: Info, address: str, rea
             ioc_filled = True
             sell_oid = None
 
-    # After IOC taker exit fills, immediately reset local inventory state
-    # so the bot stops trying to exit a position that no longer exists
+    # After IOC taker exit fills, verify actual exchange state before resetting.
+    # Multiple IOC fills for the same coin could cause double-reset otherwise.
     if ioc_filled:
-        print(f"  [{coin}] IOC exit filled — resetting inventory state")
-        with _lock:
-            positions[coin] = {"size": 0, "entry_price": 0, "unrealized_pnl": 0}
-        inventory_mode[coin] = "neutral"
-        inventory_entered_at.pop(coin, None)
+        print(f"  [{coin}] IOC exit filled — verifying position from exchange")
+        try:
+            state = info.user_state(address)
+            actual_pos = 0.0
+            if state:
+                for pos_data in state.get("assetPositions", []):
+                    p = pos_data.get("position", {})
+                    if p.get("coin") == coin:
+                        actual_pos = float(p.get("szi", 0))
+                        break
+            if abs(actual_pos) < 0.001:
+                with _lock:
+                    positions[coin] = {"size": 0, "entry_price": 0, "unrealized_pnl": 0}
+                inventory_mode[coin] = "neutral"
+                inventory_entered_at.pop(coin, None)
+                print(f"  [{coin}] Confirmed flat — inventory reset")
+            else:
+                print(f"  [{coin}] Still has position {actual_pos} — skipping reset")
+        except Exception as e:
+            print(f"  [{coin}] Post-IOC verify failed: {e}")
 
     active_oids[coin] = {
         "buy_oid": buy_oid,
@@ -634,8 +668,8 @@ def cancel_coin_orders(exchange: Exchange, info: Info, address: str, coin: str):
             if order.get("coin") == coin:
                 try:
                     exchange.cancel(coin, order["oid"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  Cancel order {order.get('oid')} failed: {e}")
     except Exception as e:
         print(f"  Cancel error {coin}: {e}")
 
@@ -703,7 +737,7 @@ def refresh_account(info: Info, address: str):
             "total_margin": float(margin.get("totalMarginUsed", 0)),
         }
 
-        if initial_portfolio_value is None and account_value > 0:
+        if initial_portfolio_value is None and account_value > 1.0:
             initial_portfolio_value = account_value
 
         new_positions = {}
@@ -765,8 +799,11 @@ def check_fills(info: Info, address: str):
         new_fills = [f for f in fills if float(f.get("time", 0)) / 1000 > start_time]
         new_count = len(new_fills)
 
-        if new_count > total_trade_count:
-            for f in new_fills[total_trade_count:]:
+        with _lock:
+            current_count = total_trade_count
+
+        if new_count > current_count:
+            for f in new_fills[current_count:]:
                 coin = f.get("coin", "")
                 side = f.get("side", "")
                 price = float(f.get("px", 0))
@@ -785,7 +822,8 @@ def check_fills(info: Info, address: str):
                     "closed_pnl": closed_pnl,
                 })
 
-            total_trade_count = new_count
+            with _lock:
+                total_trade_count = new_count
     except Exception as e:
         print(f"  Fills error: {e}")
 
@@ -840,6 +878,11 @@ def compute_flatten_stats() -> dict:
 
 def write_status():
     """Write status JSON for dashboard."""
+    # Snapshot shared state under lock to avoid RuntimeError during dict iteration
+    with _lock:
+        micro_snap = {k: dict(v) for k, v in microprice_state.items()}
+        pos_snap = {k: dict(v) for k, v in positions.items()}
+
     pv = last_balances.get("account_value", 0)
     portfolio_pnl = pv - initial_portfolio_value if initial_portfolio_value else 0
     bot_realized_pnl = sum(f.get("closed_pnl", 0) for f in all_fills)
@@ -847,7 +890,7 @@ def write_status():
 
     # Microprice data for dashboard
     micro_data = {}
-    for coin, mp in microprice_state.items():
+    for coin, mp in micro_snap.items():
         micro_data[coin] = {
             "mid": round(mp["mid"], 6),
             "micro": round(mp["micro"], 6),
@@ -860,8 +903,8 @@ def write_status():
     pair_status = {}
     for p in PAIRS:
         coin = COIN_MAP.get(p, p.replace("-PERP", ""))
-        pos = positions.get(coin, {})
-        mp = microprice_state.get(coin, {})
+        pos = pos_snap.get(coin, {})
+        mp = micro_snap.get(coin, {})
         pair_fills_list = [f for f in all_fills if coin in f.get("pair", "")]
         pair_status[p] = {
             "trade_count": len(pair_fills_list),
@@ -910,8 +953,8 @@ def write_status():
     try:
         with open(STATUS_FILE, "w") as f:
             json.dump(status, f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  Status write error: {e}")
 
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
@@ -957,8 +1000,14 @@ def discover_tick_sizes(info: Info):
             coin = COIN_MAP.get(pair, pair.replace("-PERP", ""))
             try:
                 l2 = info.l2_snapshot(coin)
+                if not l2 or "levels" not in l2 or len(l2["levels"]) < 2:
+                    print(f"    {coin}: empty L2 book, using fallback")
+                    continue
                 bids = l2["levels"][0][:10]
                 asks = l2["levels"][1][:10]
+                if not bids or not asks:
+                    print(f"    {coin}: empty bid/ask levels, using fallback")
+                    continue
                 prices = [float(b["px"]) for b in bids] + [float(a["px"]) for a in asks]
                 prices.sort()
                 diffs = [round(prices[i+1] - prices[i], 10)

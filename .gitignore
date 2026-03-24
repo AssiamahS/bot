@@ -7,3 +7,4 @@ data/*.csv
 venv/
 node_modules/
 config.json
+.collaborator

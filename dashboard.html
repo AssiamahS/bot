@@ -114,14 +114,61 @@ function pnlClass(n) { return n > 0 ? 'positive' : n < 0 ? 'negative' : 'neutral
 
 let activeTab = location.hash.replace('#','') || 'all';
 if (!['all','sol','btc','eth'].includes(activeTab)) activeTab = 'all';
-const STATUS_FILES = { all: '/status/all.json', sol: '/status/sol.json', btc: '/status/btc.json', eth: '/status/eth.json' };
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':8084/ws';
+let ws = null;
+let lastData = {};
+
+function connectWebSocket() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+    // Request current state for active tab
+    ws.send(JSON.stringify({ type: 'subscribe', bot: activeTab }));
+  };
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.bot) lastData[msg.bot] = msg.data || msg;
+      if (msg.data) {
+        // Direct status update
+        if (activeTab === 'all') {
+          const allData = mergeStatuses(Object.values(lastData));
+          renderDashboard(allData);
+        } else if (msg.bot === activeTab) {
+          renderDashboard(msg.data);
+        }
+      }
+      // Update dot indicators for all bots
+      for (const [bot, data] of Object.entries(lastData)) {
+        const age = (Date.now()/1000) - (data.updated_at || 0);
+        const dot = document.getElementById('dot-' + bot);
+        if (dot) dot.className = 'dot ' + (data.running && age < 120 ? 'live' : 'off');
+      }
+    } catch(e) { console.error('WS parse error:', e); }
+  };
+  ws.onclose = () => {
+    console.log('WebSocket disconnected, reconnecting in 3s...');
+    document.getElementById('bot-status').textContent = 'Disconnected';
+    document.getElementById('bot-status').className = 'status offline';
+    setTimeout(connectWebSocket, 3000);
+  };
+  ws.onerror = (e) => { console.error('WebSocket error:', e); };
+}
 
 function switchTab(tab) {
   activeTab = tab;
   location.hash = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`.tab[data-bot="${tab}"]`).classList.add('active');
-  refresh();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'subscribe', bot: tab }));
+  }
+  // Render from cache if available
+  if (tab === 'all' && Object.keys(lastData).length > 0) {
+    renderDashboard(mergeStatuses(Object.values(lastData)));
+  } else if (lastData[tab]) {
+    renderDashboard(lastData[tab]);
+  }
 }
 
 // Set correct tab on load
@@ -164,34 +211,8 @@ function mergeStatuses(statuses) {
   return merged;
 }
 
-async function refresh() {
-  // Update tab dots
-  for (const bot of ['sol','btc','eth']) {
-    try {
-      const r = await fetch(STATUS_FILES[bot] + '?t=' + Date.now());
-      if (r.ok) {
-        const s = await r.json();
-        const age = (Date.now()/1000) - (s.updated_at || 0);
-        const dot = document.getElementById('dot-' + bot);
-        dot.className = 'dot ' + (s.running && age < 120 ? 'live' : 'off');
-      }
-    } catch(e) {}
-  }
-
+function renderDashboard(d) {
   try {
-    let d;
-    if (activeTab === 'all') {
-      const results = await Promise.all(['sol','btc','eth'].map(async b => {
-        try { const r = await fetch(STATUS_FILES[b] + '?t=' + Date.now()); return r.ok ? await r.json() : null; }
-        catch(e) { return null; }
-      }));
-      d = mergeStatuses(results);
-      document.getElementById('dot-all').className = 'dot ' + (d.running ? 'live' : 'off');
-    } else {
-      const res = await fetch(STATUS_FILES[activeTab] + '?t=' + Date.now());
-      if (!res.ok) throw new Error('No status file');
-      d = await res.json();
-    }
 
     const age = (Date.now()/1000) - (d.updated_at || 0);
     const alive = d.running && age < 120;
@@ -309,8 +330,7 @@ async function refresh() {
   }
 }
 
-refresh();
-setInterval(refresh, 5000);
+connectWebSocket();
 </script>
 </body>
 </html>

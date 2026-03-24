@@ -19,24 +19,24 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 
-# Telegram alerts
-TG_TOKEN = "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU"
-TG_CHAT_ID = "8727843043"
-
-def tg_send(msg):
-    try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
-        urllib.request.urlopen(url, data=data, timeout=5)
-    except Exception:
-        pass
-
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
 
 # Load config
-with open(CONFIG_FILE) as f:
-    config = json.load(f)
+try:
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    print(f"FATAL: Config file not found: {CONFIG_FILE}")
+    print("  Copy config.example.json to config.json and fill in your keys.")
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"FATAL: Invalid JSON in {CONFIG_FILE}: {e}")
+    sys.exit(1)
+
+if "wallet_private_key" not in config:
+    print("FATAL: Missing 'wallet_private_key' in config.json")
+    sys.exit(1)
 
 PRIVATE_KEY = config["wallet_private_key"]
 WALLET_ADDRESS = config.get("wallet_address", "")
@@ -45,6 +45,20 @@ PAIRS = config.get("pairs", ["SOL-PERP", "BTC-PERP", "ETH-PERP"])
 ORDER_SIZE_USD = config.get("order_size_usd", 10.0)
 REFRESH_SECS = config.get("refresh_secs", 15)
 MIN_SPREAD_BPS = config.get("min_spread_bps", 5)  # 5 bps = 0.05%
+
+# Telegram alerts (from config, not hardcoded)
+TG_TOKEN = config.get("tg_token", "")
+TG_CHAT_ID = config.get("tg_chat_id", "")
+
+def tg_send(msg):
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"}).encode()
+        urllib.request.urlopen(url, data=data, timeout=5)
+    except Exception as e:
+        sys.stderr.write(f"  tg_send failed: {e}\n")
 
 # Hyperliquid asset indices (mainnet)
 # These map coin names to their index on Hyperliquid
@@ -173,9 +187,13 @@ def get_volatility_bps(coin, mid):
     # Calculate returns in bps
     returns = []
     for i in range(1, len(history)):
+        if history[i - 1] == 0:
+            continue
         ret = (history[i] - history[i - 1]) / history[i - 1] * 10000
         returns.append(ret)
 
+    if not returns:
+        return 0
     mean_ret = sum(returns) / len(returns)
     variance = sum((r - mean_ret) ** 2 for r in returns) / len(returns)
     return variance ** 0.5  # stdev in bps
@@ -235,8 +253,8 @@ def get_account_state(info, address):
                 for b in spot.get("balances", []):
                     if b["coin"] == "USDC" and float(b["total"]) > 0:
                         spot_usdc = float(b["total"])
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  Spot balance check error: {e}")
 
             total_value = perps_value + spot_usdc
 
@@ -279,8 +297,8 @@ def cancel_all_orders(exchange, info, address):
                 oid = order.get("oid", 0)
                 try:
                     exchange.cancel(coin, oid)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  Cancel order {oid} failed: {e}")
             print(f"  Cancelled {len(open_orders)} orders")
             return len(open_orders)
     except Exception as e:
@@ -381,7 +399,7 @@ def write_status():
     """Write status JSON for dashboard."""
     pv = portfolio_value()
     global initial_portfolio_value
-    if initial_portfolio_value is None and pv > 0:
+    if initial_portfolio_value is None and pv > 1.0:
         initial_portfolio_value = pv
 
     portfolio_pnl = pv - initial_portfolio_value if initial_portfolio_value else 0
@@ -430,8 +448,8 @@ def write_status():
     try:
         with open(STATUS_FILE, "w") as f:
             json.dump(status, f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  Status write error: {e}")
 
 
 def run_cycle(info, exchange, address):
@@ -445,9 +463,9 @@ def run_cycle(info, exchange, address):
         write_status()
         return
 
-    # Cancel existing orders
+    # Cancel existing orders and clear stale list
     cancel_all_orders(exchange, info, address)
-    active_orders = []
+    active_orders.clear()
 
     # Get account state
     get_account_state(info, address)
@@ -507,6 +525,9 @@ def run_cycle(info, exchange, address):
         sell_price = round(max(best_ask - (10 ** -p_dec), mid + ob_shift + sell_half), p_dec)
 
         # Ensure order value is above $10 minimum
+        if mid <= 0:
+            print(f"  {coin} | mid price is 0, skipping")
+            continue
         raw_size = ORDER_SIZE_USD / mid
         size = round(raw_size, s_dec)
         if size * mid < 10.0:
