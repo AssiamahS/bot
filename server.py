@@ -26,6 +26,7 @@ BOT_REPO = os.path.expanduser("~/hyperliquid")
 SOL_LOG = os.path.expanduser("~/hyperliquid-sol/sol.log")
 TRADER_LOG = os.path.expanduser("~/hyperliquid-sol/trader.log")
 LIVE_STATUS = os.path.expanduser("~/hyperliquid-sol/trader_status.json")
+EVENTS_FILE = os.path.expanduser("~/hyperliquid-sol/events.jsonl")
 
 BRANCH_ORDER = [
     "main", "modes", "sol", "prof", "pong", "money", "pnl", "last",
@@ -208,6 +209,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b'{"error":"not found"}')
             return
 
+
+        # Events JSON (last N events for dashboard)
+        if path == "/events.json":
+            events = []
+            if os.path.exists(EVENTS_FILE):
+                with open(EVENTS_FILE, "r", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                events.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+            # Return last 500 events
+            data = json.dumps(events[-500:]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         # Branch report JSON
         if path == "/branch-report.json":
             data = json.dumps(make_branch_report(), indent=2).encode()
@@ -222,6 +246,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Serve dashboard at root
         if path == "/" or path == "/dashboard" or path == "/dashboard.html":
             self.path = "/dashboard.html"
+        elif path == "/command-center" or path == "/command_center.html":
+            self.path = "/command_center.html"
         elif path == "/branch-report" or path == "/branch_report.html":
             self.path = "/branch_report.html"
 

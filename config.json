@@ -1,17 +1,11 @@
 {
-    "wallet_private_key": "ENV",
+    "wallet_private_key": "0x85f4ca52b5ed55cc2e1289d50810d4c2a1ebf2e4813d69b1b282f8c5e6bf3761",
     "wallet_address": "0x253831C30282760880c4833E600e897f07AdC5aE",
     "use_testnet": false,
-    "tg_token": "ENV",
-    "tg_chat_id": "ENV",
-    "pairs": [
-        "DYDX-PERP",
-        "PURR-PERP",
-        "HYPE-PERP"
-    ],
-    "order_size_usd": 10.5,
-    "refresh_secs": 2,
-    "min_spread_bps": 20,
-    "profitability_mode": "strict",
-    "safety_bps_strict": 9.0
+    "tg_token": "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU",
+    "tg_chat_id": "8727843043",
+    "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"],
+    "order_size_usd": 10.0,
+    "refresh_secs": 5,
+    "min_spread_bps": 5
 }

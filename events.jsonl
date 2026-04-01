@@ -1,0 +1,229 @@
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["DYDX-PERP", "PURR-PERP", "HYPE-PERP"], "order_size_usd": 10.5, "mode": "strict", "build_id": "git:b67fe43fe", "ts": "2026-03-16T12:55:28.677244+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["DYDX-PERP", "PURR-PERP", "HYPE-PERP"], "order_size_usd": 10.5, "mode": "strict", "build_id": "git:b67fe43fe", "ts": "2026-03-16T12:55:49.240955+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T12:56:55.153532+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -12.29, "mid": 0.094758, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T12:56:55.153695+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T12:57:06.832107+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 7.24, "mid": 0.094574, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T12:57:06.832275+00:00", "source": "live"}
+{"type": "trip", "trip_num": 0, "coin": "PURR", "net_pnl": 0.005599000000001081, "ts": "2026-03-16T13:00:13.737876+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "b", "size": 111.0, "price": 0.094549, "fee": 0.001574, "closed_pnl": 0.010323, "cost": 10.4949, "ts": "2026-03-16T13:00:14.150605+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 16.21, "mid": 0.094702, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:00:14.150796+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:00:14.549140+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -6.39, "mid": 0.094702, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:00:14.549300+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:00:18.265443+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -2.59, "mid": 0.094667, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:00:18.265604+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:00:23.265085+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -2.59, "mid": 0.094667, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:00:23.267714+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:02:01.306276+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -7.81, "mid": 0.094716, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:02:01.306471+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:03:17.626378+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -5.33, "mid": 0.094692, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:03:17.626543+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:03:21.855233+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -5.07, "mid": 0.09469, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:03:21.855413+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:04:11.321505+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -51.14, "mid": 0.095129, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:04:11.321691+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:04:15.338418+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -44.13, "mid": 0.095061, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:04:15.338581+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:05:26.544749+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -33.7, "mid": 0.094962, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:05:26.544932+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:05:43.969683+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -34.12, "mid": 0.094966, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:05:43.969855+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:06:04.537369+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -34.22, "mid": 0.094967, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:06:04.537542+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:06:09.598366+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -34.43, "mid": 0.094969, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:06:09.598547+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:08:39.316293+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -58.67, "mid": 0.0952, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:08:39.316508+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:09:08.621962+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -58.46, "mid": 0.095198, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:09:08.622154+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:11:30.127326+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -57.2, "mid": 0.095186, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:11:30.127501+00:00", "source": "live"}
+{"type": "risk", "coin": "DYDX", "reason": "drawdown 93.0%", "cooldown_secs": 30, "ts": "2026-03-16T13:11:42.494639+00:00", "source": "live"}
+{"type": "risk", "coin": "PURR", "reason": "drawdown 93.0%", "cooldown_secs": 30, "ts": "2026-03-16T13:11:42.494843+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:12:16.553678+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -73.58, "mid": 0.095343, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:12:16.553866+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:14:50.320931+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -69.83, "mid": 0.095307, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:14:50.321104+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:16:11.287035+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -63.31, "mid": 0.095245, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:16:11.287212+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:17:11.187526+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -72.53, "mid": 0.095334, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:17:11.187694+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:17:15.636557+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -72.53, "mid": 0.095334, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:17:15.636799+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:18:53.367658+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -170.23, "mid": 0.096281, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:18:53.367841+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:19:10.334299+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -247.77, "mid": 0.097047, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:10.334450+00:00", "source": "live"}
+{"type": "trip", "trip_num": 1, "coin": "PURR", "net_pnl": -0.025900999999998918, "ts": "2026-03-16T13:19:15.842739+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "b", "size": 111.0, "price": 0.094549, "fee": 0.001574, "closed_pnl": 0.010323, "cost": 10.4949, "ts": "2026-03-16T13:19:16.256335+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 252.93, "mid": 0.097002, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:16.256501+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:19:16.715621+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -243.39, "mid": 0.097003, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:16.715787+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:19:25.234618+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -300.84, "mid": 0.097577, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:25.234782+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:19:35.964109+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -277.22, "mid": 0.09734, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:35.964280+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:19:46.237710+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -306.65, "mid": 0.097636, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:19:46.237962+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:20:20.833228+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -291.39, "mid": 0.097482, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:20:20.833379+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:20:34.258096+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -292.08, "mid": 0.09749, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:20:34.258266+00:00", "source": "live"}
+{"type": "trip", "trip_num": 2, "coin": "PURR", "net_pnl": -0.0007009999999989195, "ts": "2026-03-16T13:20:44.238377+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "b", "size": 111.0, "price": 0.094549, "fee": 0.001574, "closed_pnl": 0.010323, "cost": 10.4949, "ts": "2026-03-16T13:20:44.663519+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 300.58, "mid": 0.097479, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:20:44.663684+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:20:45.058562+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -291.04, "mid": 0.097479, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:20:45.058721+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:20:57.216554+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -292.43, "mid": 0.097493, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:20:57.216723+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:21:19.904583+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -290.29, "mid": 0.097472, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:21:19.904740+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:21:23.839127+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -284.36, "mid": 0.097412, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:21:23.839280+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:22:02.941220+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -301.33, "mid": 0.097583, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:02.941375+00:00", "source": "live"}
+{"type": "trip", "trip_num": 3, "coin": "PURR", "net_pnl": 0.0008740000000010805, "ts": "2026-03-16T13:22:09.146402+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "b", "size": 111.0, "price": 0.094549, "fee": 0.001574, "closed_pnl": 0.010323, "cost": 10.4949, "ts": "2026-03-16T13:22:09.548308+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 301.92, "mid": 0.097493, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:09.548451+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:22:09.937569+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -292.38, "mid": 0.097493, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:09.937706+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:22:29.983971+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -252.59, "mid": 0.097095, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:29.984138+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:22:33.132758+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -252.64, "mid": 0.097095, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:33.132905+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:22:39.822233+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -252.69, "mid": 0.097096, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:22:39.822398+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:25:29.199871+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -251.23, "mid": 0.097081, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:25:29.200046+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:26:21.804392+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -254.25, "mid": 0.097111, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:26:21.804558+00:00", "source": "live"}
+{"type": "trip", "trip_num": 4, "coin": "DYDX", "net_pnl": 0.00994700000000033, "ts": "2026-03-16T13:27:57.954515+00:00", "source": "live"}
+{"type": "fill", "coin": "DYDX", "side": "b", "size": 115.2, "price": 0.09107, "fee": 0.001573, "closed_pnl": 0.0, "cost": 10.4913, "ts": "2026-03-16T13:27:58.344884+00:00", "source": "live"}
+{"coin": "DYDX", "edge_bps": 14.8, "mid": 0.091205, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:27:58.345025+00:00", "source": "live"}
+{"type": "trip", "trip_num": 5, "coin": "PURR", "net_pnl": -0.0007009999999989195, "ts": "2026-03-16T13:27:58.732787+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "b", "size": 111.0, "price": 0.094549, "fee": 0.001574, "closed_pnl": 0.010323, "cost": 10.4949, "ts": "2026-03-16T13:27:59.122973+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": 250.42, "mid": 0.096977, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:27:59.123130+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:27:59.508371+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -240.83, "mid": 0.096977, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:27:59.508504+00:00", "source": "live"}
+{"type": "fill", "coin": "PURR", "side": "a", "size": 111.0, "price": 0.094642, "fee": 0.001575, "closed_pnl": 0.0, "cost": 10.5053, "ts": "2026-03-16T13:29:05.209401+00:00", "source": "live"}
+{"coin": "PURR", "edge_bps": -240.83, "mid": 0.096977, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:29:05.209562+00:00", "source": "live"}
+{"type": "bot_stop", "portfolio": 128.207449, "fills": 49, "ts": "2026-03-16T13:29:17.970739+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"], "order_size_usd": 10.0, "mode": "strict", "build_id": "git:b67fe43fe", "ts": "2026-03-16T13:33:39.920367+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:33:48.338425+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 2.26, "mid": 0.22104, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:33:48.338611+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:33:55.642722+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 35.62, "mid": 0.22178, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:33:55.642876+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:34:00.837956+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 43.03, "mid": 0.221945, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:34:00.838187+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:34:27.790064+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 56.02, "mid": 0.222235, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:34:27.790238+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:35:08.616986+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 118.27, "mid": 0.223635, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:35:08.617128+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:35:16.364390+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 138.12, "mid": 0.224085, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:35:16.364569+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:35:37.673136+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 155.69, "mid": 0.224485, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:35:37.673288+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 48.0, "price": 0.22099, "fee": 0.001591, "closed_pnl": 0.0, "cost": 10.6075, "ts": "2026-03-16T13:35:41.768388+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 142.52, "mid": 0.224185, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:35:41.768545+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"], "order_size_usd": 10.0, "mode": "strict", "build_id": "git:b67fe43fe", "ts": "2026-03-16T13:36:12.092076+00:00", "source": "live"}
+{"type": "trip", "trip_num": 0, "coin": "FET", "net_pnl": -0.14132799999999993, "ts": "2026-03-16T13:36:17.162911+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 90.0, "price": 0.22292, "fee": 0.009028, "closed_pnl": -0.1323, "cost": 20.0628, "ts": "2026-03-16T13:36:17.555388+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -6.72, "mid": 0.22307, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-16T13:36:17.555540+00:00", "source": "live"}
+{"type": "bot_stop", "portfolio": 125.888242, "fills": 1, "ts": "2026-03-16T13:36:27.275086+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"], "order_size_usd": 10.0, "mode": "ws_microprice", "ts": "2026-03-23T09:32:20.786607+00:00", "source": "live"}
+{"type": "bot_stop", "portfolio": 0.08, "fills": 0, "ts": "2026-03-23T09:40:27.850083+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"], "order_size_usd": 10.0, "mode": "ws_microprice", "ts": "2026-03-23T09:40:57.813531+00:00", "source": "live"}
+{"type": "bot_stop", "portfolio": 0.08, "fills": 0, "ts": "2026-03-23T09:55:01.533797+00:00", "source": "live"}
+{"type": "bot_start", "exchange": "hyperliquid", "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"], "order_size_usd": 10.0, "mode": "strict", "build_id": "git:b67fe43fe", "ts": "2026-03-23T23:16:25.446091+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "b", "size": 0.0044, "price": 2282.8, "fee": 0.001506, "closed_pnl": 0.0, "cost": 10.0443, "ts": "2026-03-23T23:16:25.836759+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": -651.61, "mid": 2143.15, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:25.836933+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "b", "size": 0.00014, "price": 73543.0, "fee": 0.001544, "closed_pnl": 0.0, "cost": 10.296, "ts": "2026-03-23T23:16:26.231786+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": -435.41, "mid": 70474.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:26.231954+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "b", "size": 0.11, "price": 93.516, "fee": 0.001543, "closed_pnl": 0.0, "cost": 10.2868, "ts": "2026-03-23T23:16:26.624718+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": -250.52, "mid": 91.2305, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:26.624872+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 46.0, "price": 0.22623, "fee": 0.00156, "closed_pnl": 0.0, "cost": 10.4066, "ts": "2026-03-23T23:16:27.021989+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -29.48, "mid": 0.225565, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:27.022148+00:00", "source": "live"}
+{"type": "trip", "trip_num": 0, "coin": "SOL", "net_pnl": 0.0020839999999996747, "ts": "2026-03-23T23:16:27.414061+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "a", "size": 0.11, "price": 93.563, "fee": 0.001543, "closed_pnl": 0.00517, "cost": 10.2919, "ts": "2026-03-23T23:16:27.808509+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": 255.67, "mid": 91.2305, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:27.808710+00:00", "source": "live"}
+{"type": "trip", "trip_num": 1, "coin": "BTC", "net_pnl": 0.002091, "ts": "2026-03-23T23:16:28.204955+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "a", "size": 0.00014, "price": 73580.0, "fee": 0.001545, "closed_pnl": 0.00518, "cost": 10.3012, "ts": "2026-03-23T23:16:28.605914+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": 440.66, "mid": 70474.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:28.606092+00:00", "source": "live"}
+{"type": "trip", "trip_num": 2, "coin": "ETH", "net_pnl": 0.0022669999999992, "ts": "2026-03-23T23:16:29.002333+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "a", "size": 0.0044, "price": 2284.0, "fee": 0.001507, "closed_pnl": 0.00528, "cost": 10.0496, "ts": "2026-03-23T23:16:29.409662+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": 657.21, "mid": 2143.15, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:29.409832+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "b", "size": 0.11, "price": 93.919, "fee": 0.001549, "closed_pnl": 0.0, "cost": 10.3311, "ts": "2026-03-23T23:16:29.808418+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": -294.69, "mid": 91.2305, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:29.808650+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "b", "size": 0.0044, "price": 2289.0, "fee": 0.00151, "closed_pnl": 0.0, "cost": 10.0716, "ts": "2026-03-23T23:16:30.201681+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": -680.54, "mid": 2143.15, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:30.201844+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "b", "size": 0.00014, "price": 73692.0, "fee": 0.001547, "closed_pnl": 0.0, "cost": 10.3169, "ts": "2026-03-23T23:16:30.605668+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": -456.4, "mid": 70475.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:30.605829+00:00", "source": "live"}
+{"type": "trip", "trip_num": 3, "coin": "FET", "net_pnl": 0.05017900000000073, "ts": "2026-03-23T23:16:30.993040+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 44.0, "price": 0.22744, "fee": 0.001501, "closed_pnl": 0.05324, "cost": 10.0074, "ts": "2026-03-23T23:16:31.380195+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 83.12, "mid": 0.225565, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:31.380341+00:00", "source": "live"}
+{"type": "trip", "trip_num": 4, "coin": "BTC", "net_pnl": 0.002085, "ts": "2026-03-23T23:16:31.776614+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "a", "size": 0.00014, "price": 73729.0, "fee": 0.001548, "closed_pnl": 0.00518, "cost": 10.3221, "ts": "2026-03-23T23:16:32.165115+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": 461.35, "mid": 70477.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:32.165257+00:00", "source": "live"}
+{"type": "trip", "trip_num": 5, "coin": "ETH", "net_pnl": 0.0018189999999995996, "ts": "2026-03-23T23:16:32.555303+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "a", "size": 0.0044, "price": 2290.1, "fee": 0.001511, "closed_pnl": 0.00484, "cost": 10.0764, "ts": "2026-03-23T23:16:32.954362+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": 684.68, "mid": 2143.35, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:32.954499+00:00", "source": "live"}
+{"type": "trip", "trip_num": 6, "coin": "SOL", "net_pnl": 0.0020709999999996747, "ts": "2026-03-23T23:16:33.348359+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "a", "size": 0.11, "price": 93.966, "fee": 0.00155, "closed_pnl": 0.00517, "cost": 10.3363, "ts": "2026-03-23T23:16:33.737533+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": 298.83, "mid": 91.2395, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:33.737715+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "a", "size": 0.0044, "price": 2286.7, "fee": 0.001509, "closed_pnl": 0.0, "cost": 10.0615, "ts": "2026-03-23T23:16:34.132689+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": 668.81, "mid": 2143.35, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:34.132846+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "b", "size": 0.11, "price": 93.81, "fee": 0.001547, "closed_pnl": 0.0, "cost": 10.3191, "ts": "2026-03-23T23:16:34.544508+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": -281.73, "mid": 91.2395, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:34.544696+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 44.0, "price": 0.22864, "fee": 0.001509, "closed_pnl": 0.0, "cost": 10.0602, "ts": "2026-03-23T23:16:34.945360+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -136.1, "mid": 0.22557, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:34.945523+00:00", "source": "live"}
+{"type": "trip", "trip_num": 7, "coin": "FET", "net_pnl": 0.004900999999999372, "ts": "2026-03-23T23:16:35.334517+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 44.0, "price": 0.22882, "fee": 0.00151, "closed_pnl": 0.01254, "cost": 10.0681, "ts": "2026-03-23T23:16:35.725028+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 144.08, "mid": 0.22557, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:35.725171+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "b", "size": 0.00014, "price": 73663.0, "fee": 0.001546, "closed_pnl": 0.0, "cost": 10.3128, "ts": "2026-03-23T23:16:36.134077+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": -451.69, "mid": 70479.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:36.134234+00:00", "source": "live"}
+{"type": "trip", "trip_num": 8, "coin": "SOL", "net_pnl": 0.002074999999999675, "ts": "2026-03-23T23:16:36.533727+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "a", "size": 0.11, "price": 93.857, "fee": 0.001548, "closed_pnl": 0.00517, "cost": 10.3243, "ts": "2026-03-23T23:16:36.934463+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": 286.88, "mid": 91.2395, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:36.934653+00:00", "source": "live"}
+{"type": "trip", "trip_num": 9, "coin": "BTC", "net_pnl": 0.0020869999999999994, "ts": "2026-03-23T23:16:37.342412+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "a", "size": 0.00014, "price": 73700.0, "fee": 0.001547, "closed_pnl": 0.00518, "cost": 10.318, "ts": "2026-03-23T23:16:37.740026+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": 456.94, "mid": 70479.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:37.740183+00:00", "source": "live"}
+{"type": "trip", "trip_num": 10, "coin": "ETH", "net_pnl": 0.0018229999999996001, "ts": "2026-03-23T23:16:38.134220+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "b", "size": 0.0044, "price": 2285.6, "fee": 0.001508, "closed_pnl": 0.00484, "cost": 10.0566, "ts": "2026-03-23T23:16:38.533761+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": -663.68, "mid": 2143.35, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:38.533901+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "b", "size": 0.0049, "price": 2043.0, "fee": 0.001501, "closed_pnl": 0.0, "cost": 10.0107, "ts": "2026-03-23T23:16:38.919943+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": 468.19, "mid": 2143.35, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:38.920102+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "a", "size": 0.00015, "price": 68375.0, "fee": 0.001538, "closed_pnl": 0.0, "cost": 10.2562, "ts": "2026-03-23T23:16:39.316198+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": -298.6, "mid": 70479.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:39.316348+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "a", "size": 0.12, "price": 85.835, "fee": 0.001545, "closed_pnl": 0.0, "cost": 10.3002, "ts": "2026-03-23T23:16:39.724055+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": -592.34, "mid": 91.2395, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:39.724225+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 49.0, "price": 0.20594, "fee": 0.001513, "closed_pnl": -0.04519, "cost": 10.0911, "ts": "2026-03-23T23:16:40.128409+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -869.43, "mid": 0.22555, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:40.128552+00:00", "source": "live"}
+{"type": "trip", "trip_num": 11, "coin": "SOL", "net_pnl": 0.002070999999999059, "ts": "2026-03-23T23:16:40.623357+00:00", "source": "live"}
+{"type": "fill", "coin": "SOL", "side": "b", "size": 0.12, "price": 85.792, "fee": 0.001544, "closed_pnl": 0.00516, "cost": 10.295, "ts": "2026-03-23T23:16:41.018199+00:00", "source": "live"}
+{"coin": "SOL", "edge_bps": 597.06, "mid": 91.2395, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:41.018341+00:00", "source": "live"}
+{"type": "trip", "trip_num": 12, "coin": "BTC", "net_pnl": 0.0020249999999999995, "ts": "2026-03-23T23:16:41.426748+00:00", "source": "live"}
+{"type": "fill", "coin": "BTC", "side": "b", "size": 0.00015, "price": 68341.0, "fee": 0.001537, "closed_pnl": 0.0051, "cost": 10.2511, "ts": "2026-03-23T23:16:41.836539+00:00", "source": "live"}
+{"coin": "BTC", "edge_bps": 303.42, "mid": 70479.5, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:41.836761+00:00", "source": "live"}
+{"type": "trip", "trip_num": 13, "coin": "FET", "net_pnl": 0.0023649999999999505, "ts": "2026-03-23T23:16:42.315507+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 49.0, "price": 0.20583, "fee": 0.001512, "closed_pnl": 0.00517, "cost": 10.0857, "ts": "2026-03-23T23:16:42.705298+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 874.31, "mid": 0.22555, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:42.705439+00:00", "source": "live"}
+{"type": "trip", "trip_num": 14, "coin": "ETH", "net_pnl": 0.0018969999999999998, "ts": "2026-03-23T23:16:43.104260+00:00", "source": "live"}
+{"type": "fill", "coin": "ETH", "side": "a", "size": 0.0049, "price": 2044.0, "fee": 0.001502, "closed_pnl": 0.0049, "cost": 10.0156, "ts": "2026-03-23T23:16:43.505443+00:00", "source": "live"}
+{"coin": "ETH", "edge_bps": -463.53, "mid": 2143.35, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:16:43.505642+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 47.0, "price": 0.22533, "fee": 0.001588, "closed_pnl": 0.0, "cost": 10.5905, "ts": "2026-03-23T23:17:28.108694+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -2.0, "mid": 0.225285, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:17:28.108858+00:00", "source": "live"}
+{"type": "trip", "trip_num": 15, "coin": "FET", "net_pnl": 0.913794, "ts": "2026-03-23T23:17:33.636047+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 47.0, "price": 0.22534, "fee": 0.001588, "closed_pnl": 0.037882, "cost": 10.591, "ts": "2026-03-23T23:17:34.039708+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 0.22, "mid": 0.225335, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:17:34.039877+00:00", "source": "live"}
+{"type": "trip", "trip_num": 16, "coin": "FET", "net_pnl": 0.037371999999999996, "ts": "2026-03-23T23:18:14.870196+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 47.0, "price": 0.22531, "fee": 0.001588, "closed_pnl": 0.001552, "cost": 10.5896, "ts": "2026-03-23T23:18:15.269463+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 0.44, "mid": 0.2253, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:18:15.269667+00:00", "source": "live"}
+{"type": "trip", "trip_num": 17, "coin": "FET", "net_pnl": -0.004008425531914545, "ts": "2026-03-23T23:19:02.052032+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 47.0, "price": 0.22533, "fee": 0.001588, "closed_pnl": -0.0009, "cost": 10.5905, "ts": "2026-03-23T23:19:02.452126+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 0.22, "mid": 0.225335, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:19:02.452293+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 47.0, "price": 0.22528, "fee": 0.001588, "closed_pnl": 0.0, "cost": 10.5882, "ts": "2026-03-23T23:19:13.156641+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 0.22, "mid": 0.225285, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:19:13.156815+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "b", "size": 47.0, "price": 0.2252, "fee": 0.001587, "closed_pnl": 0.0, "cost": 10.5844, "ts": "2026-03-23T23:19:30.241974+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": 0.22, "mid": 0.225205, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:19:30.242153+00:00", "source": "live"}
+{"type": "trip", "trip_num": 18, "coin": "FET", "net_pnl": -0.03312757446808662, "ts": "2026-03-23T23:19:33.264291+00:00", "source": "live"}
+{"type": "fill", "coin": "FET", "side": "a", "size": 96.0, "price": 0.22512, "fee": 0.009725, "closed_pnl": -0.011616, "cost": 21.6115, "ts": "2026-03-23T23:19:33.673289+00:00", "source": "live"}
+{"coin": "FET", "edge_bps": -2.0, "mid": 0.225165, "build_id": "git:b67fe43fe", "type": "fill_context", "ts": "2026-03-23T23:19:33.673449+00:00", "source": "live"}

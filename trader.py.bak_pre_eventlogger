@@ -23,7 +23,6 @@ from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 from tg_commander import TelegramCommander
-from event_logger import EventLogger
 
 # === SINGLETON LOCK: prevent multiple instances ===
 import fcntl
@@ -36,24 +35,20 @@ except IOError:
     print("ERROR: Another trader instance is already running. Exiting.")
     sys.exit(1)
 
-# === EVENT LOGGER ===
-BUILD_ID = "git:b67fe43fe"
-event_log = EventLogger()
-
 def _api_call(fn, *args, **kwargs):
-    """Wrap REST API calls with rate limit check. No retry on 429 — skip instead."""
-    if not rate_limiter_check():
-        print(f"  RATE LIMIT: skipping API call (>{MAX_REQUESTS_PER_MIN}/min)")
-        return None
-    try:
-        rate_limiter_record()
-        result = fn(*args, **kwargs)
-        return result
-    except Exception as e:
-        if '429' in str(e):
-            print(f"  429 from HL — skipping cycle (no retry)")
-            return None
-        raise
+    """Wrap REST API calls with retry on 429."""
+    for attempt in range(3):
+        try:
+            result = fn(*args, **kwargs)
+            return result
+        except Exception as e:
+            if '429' in str(e):
+                wait = (attempt + 1) * 2
+                print(f"  429 rate limit, backing off {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+    return None
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trader_status.json")
@@ -186,51 +181,37 @@ quotes_skipped_weak = 0
 # Inventory tracking for mean/variance
 inventory_samples = []  # list of inventory_usd values over time
 last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "market_ticks": 0, "required_ticks": 0, "expected_net": 0.0}
-# --- Real sliding window rate limiter ---
-# Hyperliquid limit: 1200 requests/min per IP. We use 600/min (50% safety margin).
-MAX_REQUESTS_PER_MIN = 600
-_request_timestamps = deque()
-request_count = 0  # lifetime counter for dashboard
-volume_traded_usd = 0.0
+# --- Request budget protection ---
+REQUEST_BUDGET_BUFFER = 200   # pause quoting when within 200 requests of estimated limit
+request_count = 0             # total API requests sent this session
+volume_traded_usd = 0.0       # total volume traded this session
 request_budget_paused = False
 
-def rate_limiter_check():
-    """Return True if we can make another request within the rate limit."""
-    now = time.time()
-    while _request_timestamps and now - _request_timestamps[0] > 60:
-        _request_timestamps.popleft()
-    return len(_request_timestamps) < MAX_REQUESTS_PER_MIN
-
-def rate_limiter_record():
-    """Record a request timestamp."""
-    global request_count
-    _request_timestamps.append(time.time())
-    request_count += 1
-
 def track_request():
-    """Track an API request (for calls not going through _api_call)."""
-    rate_limiter_record()
+    global request_count
+    request_count += 1
 
 def track_volume(usd_amount):
     global volume_traded_usd
     volume_traded_usd += abs(usd_amount)
 
 def request_budget_remaining():
-    """Requests remaining in current 60s window."""
-    now = time.time()
-    while _request_timestamps and now - _request_timestamps[0] > 60:
-        _request_timestamps.popleft()
-    return MAX_REQUESTS_PER_MIN - len(_request_timestamps)
+    # HL allows ~2 requests per $1 traded, plus base allowance
+    # Also grant 100 requests per hour of uptime so polling never starves quoting
+    uptime_hours = (time.time() - start_time) / 3600
+    time_allowance = uptime_hours * 100
+    allowed = 1000 + volume_traded_usd * 2.0 + time_allowance
+    return int(allowed - request_count)
 
 # Queue-preserving quoting: two-tier drift thresholds
 QUEUE_KEEP_BPS = 8    # keep resting order if drift <= this (preserve queue position)
 REPLACE_BPS = 15      # only cancel+replace if drift exceeds this
-# Dynamic: widen tolerance when rate limit budget is low
+# Dynamic: widen tolerance when request budget is low
 def get_drift_thresholds():
     remaining = request_budget_remaining()
-    if remaining < 100:
-        return 12, 20  # very conservative when near limit
-    elif remaining < 200:
+    if remaining < 500:
+        return 12, 20  # very conservative when budget low
+    elif remaining < 1000:
         return 10, 18  # conservative
     return QUEUE_KEEP_BPS, REPLACE_BPS  # normal
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
@@ -260,18 +241,17 @@ ws_fills_pending = []  # new fills from WS
 ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
-fill_received = threading.Event()  # wake main loop only on fills
 last_quote_time = {}  # coin -> timestamp of last quote update
 # Adaptive quote interval: fast when budget healthy, slow when tight
-MIN_QUOTE_INTERVAL_FAST = 4.0   # when rate limit healthy (>300 remaining)
-MIN_QUOTE_INTERVAL_NORMAL = 6.0 # moderate (150-300)
-MIN_QUOTE_INTERVAL_SLOW = 10.0  # low (<150)
+MIN_QUOTE_INTERVAL_FAST = 4.0   # when budget is healthy (>1000 remaining)
+MIN_QUOTE_INTERVAL_NORMAL = 6.0 # moderate budget (500-1000)
+MIN_QUOTE_INTERVAL_SLOW = 10.0  # low budget (<500)
 
 def get_quote_interval():
     remaining = request_budget_remaining()
-    if remaining < 150:
+    if remaining < 500:
         return MIN_QUOTE_INTERVAL_SLOW
-    elif remaining < 300:
+    elif remaining < 1000:
         return MIN_QUOTE_INTERVAL_NORMAL
     return MIN_QUOTE_INTERVAL_FAST
 
@@ -314,7 +294,7 @@ def on_l2_book(ws_msg):
                 ws_book[coin] = {"bids": bids, "asks": asks, "ts": time.time()}
 
             # Only wake the main loop if top-of-book price changed
-            if False:  # fills-only: do not wake on book changes
+            if price_changed:
                 book_changed.set()
     except Exception:
         pass
@@ -327,11 +307,9 @@ def on_user_fills(ws_msg):
         if isinstance(data, list):
             with ws_fills_lock:
                 ws_fills_pending.extend(data)
-                fill_received.set()
         elif isinstance(data, dict) and "fills" in data:
             with ws_fills_lock:
                 ws_fills_pending.extend(data["fills"])
-                fill_received.set()
     except Exception:
         pass
 
@@ -618,7 +596,7 @@ def cancel_all_orders(exchange, info, address):
                 coin = order.get("coin", "")
                 oid = order.get("oid", 0)
                 try:
-                    cancel_order(exchange, coin, oid)
+                    exchange.cancel(coin, oid)
                 except Exception:
                     pass
             print(f"  Cancelled {len(open_orders)} orders")
@@ -630,11 +608,7 @@ def cancel_all_orders(exchange, info, address):
 
 def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
     """Place a limit post-only order."""
-    if not rate_limiter_check():
-        print(f"  RATE LIMIT: skipping order {coin}")
-        return None
     try:
-        rate_limiter_record()
         order_result = exchange.order(
             coin,
             is_buy,
@@ -652,6 +626,7 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
         statuses = data.get("statuses", []) if isinstance(data, dict) else []
         if statuses and isinstance(statuses[0], dict) and "resting" in statuses[0]:
             oid = statuses[0]["resting"]["oid"]
+            track_request()
             side = "BUY" if is_buy else "SELL"
             print(f"  {side:4s} {size} {coin} @ ${price} -> {oid}")
             active_orders.append({
@@ -667,15 +642,6 @@ def place_order(exchange, coin, is_buy, size, price, reduce_only=False):
     except Exception as e:
         print(f"  Order error: {e}")
     return None
-
-
-def cancel_order(exchange, coin, oid):
-    """Cancel an order and track the API request. Use this instead of raw exchange.cancel()."""
-    if not rate_limiter_check():
-        print(f"  RATE LIMIT: skipping cancel {coin} {oid}")
-        return
-    rate_limiter_record()
-    exchange.cancel(coin, oid)
 
 
 def check_fills(info, exchange, address):
@@ -744,7 +710,7 @@ def check_fills(info, exchange, address):
                         for _o in _ords:
                             if _o.get('coin') == coin:
                                 try:
-                                    cancel_order(exchange, coin, _o['oid'])
+                                    exchange.cancel(coin, _o['oid'])
                                     _cancelled += 1
                                 except: pass
                         if _cancelled:
@@ -762,7 +728,7 @@ def check_fills(info, exchange, address):
                         _ords = _api_call(info.open_orders, address) or []
                         for _o in _ords:
                             if _o.get('coin') == coin and _o.get('side') == side:
-                                try: cancel_order(exchange, coin, _o['oid'])
+                                try: exchange.cancel(coin, _o['oid'])
                                 except: pass
                     except: pass
 
@@ -809,7 +775,6 @@ def check_fills(info, exchange, address):
                         "net": round(net, 6), "duration": round(duration, 1),
                     }
                     completed_trips.append(trip)
-                    event_log.log_trip(trip_num=round_trips, coin=coin, net_pnl=net)
                     # Track per-coin trip history for weak pair detection
                     if coin not in coin_trips:
                         coin_trips[coin] = []
@@ -843,8 +808,6 @@ def check_fills(info, exchange, address):
                     "closed_pnl": closed_pnl,
                 }
                 all_fills.append(fill)
-                event_log.log_fill(coin=coin, side=side.lower(), size=size, price=price, fee=fee, closed_pnl=closed_pnl)
-                event_log.log_custom("fill_context", coin=coin, edge_bps=round(edge_bps, 2), mid=round(fill_mid, 6), build_id=BUILD_ID)
                 track_volume(cost)  # track for request budget calculation
 
                 for p in PAIRS:
@@ -951,7 +914,7 @@ def write_status():
 
 
 def get_open_orders_by_coin(info, address):
-    """Get open orders grouped by coin (REST call)."""
+    """Get open orders grouped by coin."""
     result = {}
     try:
         orders = _api_call(info.open_orders, address) or []
@@ -963,21 +926,6 @@ def get_open_orders_by_coin(info, address):
     except Exception as e:
         print(f"  Open orders error: {e}")
     return result
-
-# Cached open orders — reconciled via REST every ORDERS_RECONCILE_SECS
-_cached_orders = {}  # coin -> [orders]
-_cached_orders_time = 0
-ORDERS_RECONCILE_SECS = 60
-
-def _get_cached_orders(info, address):
-    """Return cached open orders, refreshing from REST every 60s."""
-    global _cached_orders, _cached_orders_time
-    now = time.time()
-    if now - _cached_orders_time > ORDERS_RECONCILE_SECS:
-        _cached_orders = get_open_orders_by_coin(info, address)
-        _cached_orders_time = now
-        print(f"  ORDERS RECONCILE: {sum(len(v) for v in _cached_orders.values())} orders across {len(_cached_orders)} coins")
-    return _cached_orders
 
 
 MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
@@ -1098,8 +1046,7 @@ def run_cycle(info, exchange, address):
     if account_value <= 0:
         get_account_state(info, address)
         account_value = portfolio_value()
-    # Use cached open orders (reconciled periodically in main loop, not every cycle)
-    current_orders = _get_cached_orders(info, address)
+    current_orders = get_open_orders_by_coin(info, address)
     active_orders = []  # rebuild for dashboard
     positions = last_balances.get("positions", {})
 
@@ -1121,7 +1068,8 @@ def run_cycle(info, exchange, address):
             coin_orders = current_orders.get(coin, [])
             for o in coin_orders:
                 try:
-                    cancel_order(exchange, coin, o["oid"])
+                    exchange.cancel(coin, o["oid"])
+                    track_request()
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1190,7 +1138,7 @@ def run_cycle(info, exchange, address):
         if coin_orders:
             for o in coin_orders:
                 try:
-                    cancel_order(exchange, coin, o["oid"])
+                    exchange.cancel(coin, o["oid"])
                 except Exception:
                     pass
             print(f"  {coin} | RANKED OUT — cancelled {len(coin_orders)} orders")
@@ -1253,20 +1201,19 @@ def run_cycle(info, exchange, address):
                 risk_cooldown_until = time.time() + COOLDOWN_SECS
                 tg_send(f"⚠️ <b>RISK PAUSE</b> {coin}: {risk_reason}\nCooldown {COOLDOWN_SECS}s")
             quotes_skipped_risk += 1
-            event_log.log_risk(coin=coin, reason=risk_reason, cooldown_secs=COOLDOWN_SECS)
             continue
 
-        # --- Rate limit check (real sliding window: 600/min of HL's 1200/min) ---
+        # --- Request budget check ---
         budget_left = request_budget_remaining()
-        if budget_left < 50:  # within 50 of limit, pause quoting
+        if budget_left < REQUEST_BUDGET_BUFFER:
             if not request_budget_paused:
                 request_budget_paused = True
-                print(f"  >>> RATE LIMIT: {budget_left}/{MAX_REQUESTS_PER_MIN} remaining in window. Pausing quotes.")
+                print(f"  >>> REQUEST BUDGET LOW: {budget_left} remaining. Pausing quotes.")
             quotes_skipped_budget += 1
             continue
         elif request_budget_paused:
             request_budget_paused = False
-            print(f"  >>> RATE LIMIT OK: {budget_left}/{MAX_REQUESTS_PER_MIN} remaining. Resuming.")
+            print(f"  >>> REQUEST BUDGET OK: {budget_left} remaining. Resuming.")
 
         # Get existing orders for this coin
         coin_orders = current_orders.get(coin, [])
@@ -1287,7 +1234,7 @@ def run_cycle(info, exchange, address):
                 print(f"  STOP LOSS: {loss_bps:.0f}bps against us (~${loss_usd:.4f}), closing position")
                 tg_send(f"🛑 <b>STOP LOSS</b> {coin}: {loss_bps:.0f}bps loss, closing")
                 for o in coin_orders:
-                    try: cancel_order(exchange, coin, o["oid"])
+                    try: exchange.cancel(coin, o["oid"])
                     except: pass
                 try:
                     # Refresh position before closing to avoid stale reduce-only errors
@@ -1296,6 +1243,7 @@ def run_cycle(info, exchange, address):
                     fresh_size = fresh_pos.get("size", 0)
                     if fresh_size != 0:
                         result = _api_call(exchange.market_close, coin)
+                        track_request()
                         if result:
                             print(f"  {coin} market close sent")
                         else:
@@ -1362,10 +1310,11 @@ def run_cycle(info, exchange, address):
             if overweight_ratio > 4.0:
                 print(f"  {coin} | OVERWEIGHT FORCE CLOSE: ${pos_usd:.2f} = {overweight_ratio:.1f}x cap")
                 for o in coin_orders:
-                    try: cancel_order(exchange, coin, o["oid"])
+                    try: exchange.cancel(coin, o["oid"])
                     except: pass
                 try:
                     _api_call(exchange.market_close, coin)
+                    track_request()
                 except: pass
                 live_quotes.pop(coin, None)
                 continue
@@ -1374,10 +1323,11 @@ def run_cycle(info, exchange, address):
                 # 5+ minutes: force market close
                 print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing")
                 for o in coin_orders:
-                    try: cancel_order(exchange, coin, o["oid"])
+                    try: exchange.cancel(coin, o["oid"])
                     except: pass
                 try:
                     _api_call(exchange.market_close, coin)
+                    track_request()
                 except: pass
                 # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
@@ -1487,7 +1437,8 @@ def run_cycle(info, exchange, address):
             # Cancel all orders while paused
             for o in coin_orders:
                 try:
-                    cancel_order(exchange, coin, o["oid"])
+                    exchange.cancel(coin, o["oid"])
+                    track_request()
                 except: pass
             live_quotes.pop(coin, None)
             continue
@@ -1564,7 +1515,7 @@ def run_cycle(info, exchange, address):
             last_profitability_diag["expected_net"] = round(expected_net_tight, 6)
             if coin_orders:
                 for o in coin_orders:
-                    try: cancel_order(exchange, coin, o["oid"])
+                    try: exchange.cancel(coin, o["oid"])
                     except: pass
             quotes_skipped_profitability += 1
             print(f"  GATE [{PROFITABILITY_MODE}]: mkt={market_ticks}t req={required_ticks}t | {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps | expNet=${expected_net_tight:.4f}")
@@ -1637,7 +1588,7 @@ def run_cycle(info, exchange, address):
                 # Flat: gate both sides, no inventory to unwind
                 if coin_orders:
                     for o in coin_orders:
-                        try: cancel_order(exchange, coin, o["oid"])
+                        try: exchange.cancel(coin, o["oid"])
                         except: pass
                 quotes_skipped_profitability += 1
                 print(f"  GATE [{PROFITABILITY_MODE}]: expNet=${expected_net:.4f} <= 0 (flat, skip)")
@@ -1698,7 +1649,8 @@ def run_cycle(info, exchange, address):
                     # Must replace: crossed book, very stale, or wrong level count
                     for oid in existing_buys.values():
                         try:
-                            cancel_order(exchange, coin, oid)
+                            exchange.cancel(coin, oid)
+                            track_request()
                         except: pass
                     placed = []
                     for lvl_px in buy_levels:
@@ -1732,7 +1684,7 @@ def run_cycle(info, exchange, address):
             if existing_buys:
                 print(f"  Cancel {len(existing_buys)} BUYs (no buy: inv={inv_ratio:.0%})")
                 for oid in existing_buys.values():
-                    try: cancel_order(exchange, coin, oid)
+                    try: exchange.cancel(coin, oid)
                     except: pass
 
         # --- SELL LEVELS ---
@@ -1751,7 +1703,8 @@ def run_cycle(info, exchange, address):
                 if crossed or (top_sell_drift > replace_bps) or wrong_count:
                     for oid in existing_sells.values():
                         try:
-                            cancel_order(exchange, coin, oid)
+                            exchange.cancel(coin, oid)
+                            track_request()
                         except: pass
                     placed = []
                     for lvl_px in sell_levels:
@@ -1781,7 +1734,7 @@ def run_cycle(info, exchange, address):
             if existing_sells:
                 print(f"  Cancel {len(existing_sells)} SELLs (no sell: inv={inv_ratio:.0%})")
                 for oid in existing_sells.values():
-                    try: cancel_order(exchange, coin, oid)
+                    try: exchange.cancel(coin, oid)
                     except: pass
 
         # Print spread capture diagnostic
@@ -1832,8 +1785,8 @@ def run_cycle(info, exchange, address):
             remaining_checks.append(pfc)
     post_fill_checks[:] = remaining_checks
 
-    # Fills now processed via WebSocket in _process_ws_fills() (main loop)
-    # REST check_fills() only used at shutdown for final reconciliation
+    # Check fills (uses REST — will be replaced by WS fills later)
+    check_fills(info, exchange, address)
 
     pv = portfolio_value()
     elapsed = time.time() - start_time
@@ -1868,176 +1821,9 @@ def run_cycle(info, exchange, address):
     print(f"  Vol: ${total_vol:.0f} | Turnover: {turnover:.1f}x ({turnover_hr:.1f}x/hr){edge_stats}")
     skip_detail = f"prof:{quotes_skipped_profitability} budg:{quotes_skipped_budget} risk:{quotes_skipped_risk} weak:{quotes_skipped_weak}"
     print(f"  Gate [{PROFITABILITY_MODE}]: {quotes_placed}/{quote_attempts} placed | Skips: {skip_detail} | InvMean: ${inv_mean:.1f} InvVar: {inv_var:.0f}")
-    print(f"  RateLimit: {request_budget_remaining()}/{MAX_REQUESTS_PER_MIN} in window (lifetime:{request_count})")
+    print(f"  Budget: {request_budget_remaining()} left (reqs:{request_count} vol:${volume_traded_usd:.0f})")
     print(f"{'='*55}")
     write_status()
-
-
-def _process_ws_fills(info, exchange, address):
-    """Process fills from WebSocket queue instead of REST API.
-    Replaces the REST check_fills() call in the main loop."""
-    global total_trade_count, round_trips, strategy_pause_until
-
-    with ws_fills_lock:
-        pending = list(ws_fills_pending)
-        ws_fills_pending.clear()
-
-    if not pending:
-        return
-
-    for f in pending:
-        coin = f.get("coin", "")
-        side = f.get("side", "").upper()  # "A" (sell) or "B" (buy)
-        price = float(f.get("px", 0))
-        size = float(f.get("sz", 0))
-        fee = float(f.get("fee", 0))
-        cost = price * size
-        closed_pnl = float(f.get("closedPnl", 0))
-
-        # Calculate fill edge vs mid price
-        fill_book = get_ws_book(coin)
-        fill_mid = fill_book.get("mid", price) if fill_book else price
-        if side == "B":
-            edge = fill_mid - price
-        else:
-            edge = price - fill_mid
-        edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
-
-        fill_edges.append(edge_bps)
-        post_fill_checks.append({"coin": coin, "side": side, "price": price, "check_at": time.time() + 3.0})
-
-        # Adverse selection detector (per-coin)
-        now_fill = time.time()
-        coin_consec = consecutive_side_per_coin.get(coin)
-        if coin_consec and coin_consec["side"] == side:
-            coin_consec["count"] += 1
-        else:
-            if coin_consec and coin_consec["side"] != side:
-                if coin in adverse_side_locked:
-                    print(f"  >>> LOCKOUT CLEARED: {coin} opposite fill")
-                    adverse_side_locked.pop(coin, None)
-                    adverse_pause_until.pop(coin, None)
-                    adverse_size_mult.pop(coin, None)
-            consecutive_side_per_coin[coin] = {"side": side, "count": 1, "first_time": now_fill}
-            coin_consec = consecutive_side_per_coin[coin]
-        consec = coin_consec["count"]
-        consec_warn = ""
-
-        if consec >= 5:
-            consec_warn = f" ⚠️{consec}x{side} LOCKED"
-            adverse_pause_until[coin] = now_fill + 60.0
-            adverse_size_mult[coin] = 0.5
-            adverse_side_locked[coin] = {"side": side, "until": now_fill + 120.0}
-            # Cancel ALL resting orders for this coin
-            try:
-                _ords = _api_call(info.open_orders, address) or []
-                _cancelled = 0
-                for _o in _ords:
-                    if _o.get('coin') == coin:
-                        try:
-                            cancel_order(exchange, coin, _o['oid'])
-                            _cancelled += 1
-                        except: pass
-                if _cancelled:
-                    print(f'  >>> LOCKOUT: cancelled ALL {_cancelled} {coin} resting orders')
-                live_quotes.pop(coin, None)
-            except Exception:
-                pass
-            tg_send(f"🔒 <b>SIDE LOCKED</b> {coin}: {consec}x{side} - blocking for 120s")
-        elif consec >= 3:
-            consec_warn = f" ⚠️{consec}x{side} PAUSED"
-            adverse_pause_until[coin] = now_fill + 30.0
-            adverse_size_mult[coin] = 0.5
-            try:
-                _ords = _api_call(info.open_orders, address) or []
-                for _o in _ords:
-                    if _o.get('coin') == coin and _o.get('side') == side:
-                        try:
-                            cancel_order(exchange, coin, _o['oid'])
-                        except: pass
-            except: pass
-
-        print(f"  >>> FILL: {side} {size} {coin} @ ${price:.2f} fee=${fee:.4f} pnl=${closed_pnl:.4f} edge={edge_bps:+.1f}bps{consec_warn}")
-        emoji = "🟢" if side == "B" else "🔴"
-        rebate_str = f"Rebate: +${-fee:.4f}" if fee < 0 else f"Fee: ${fee:.4f}"
-        tg_msg = f"{emoji} <b>FILL</b>: {side} {size} {coin}\n💰 @ ${price:.2f} | {rebate_str} | Edge: {edge_bps:+.1f}bps"
-        if consec >= 5:
-            tg_msg += f"\n🔒 LOCKED: {consec}x{side} - side blocked 120s"
-        elif consec >= 3:
-            tg_msg += f"\n⚠️ ADVERSE: {consec}x{side} - paused 30s"
-        tg_send(tg_msg)
-
-        # Strategy pause
-        if len(completed_trips) >= 20:
-            recent_20 = completed_trips[-20:]
-            avg_recent = sum(t["net"] for t in recent_20) / 20
-            if avg_recent < 0 and now_fill > strategy_pause_until:
-                strategy_pause_until = now_fill + 60
-                print(f"  >>> STRATEGY PAUSE: last 20 trips avg net ${avg_recent:.4f} < 0, pausing 60s")
-                tg_send(f"⏸️ <b>STRATEGY PAUSE</b>\nLast 20 trips avg: ${avg_recent:.4f}\nPausing new quotes 60s")
-
-        # Round trip tracking
-        leg = trip_tracker.get(coin)
-        if leg is None:
-            trip_tracker[coin] = {"side": side, "price": price, "size": size, "fee": fee, "time": time.time()}
-        elif leg["side"] != side:
-            trip_size = min(leg["size"], size)
-            total_fee = leg["fee"] + fee
-            if leg["side"] == "B":
-                gross = (price - leg["price"]) * trip_size
-            else:
-                gross = (leg["price"] - price) * trip_size
-            net = gross - total_fee
-            duration = time.time() - leg["time"]
-
-            trip = {
-                "coin": coin, "size": trip_size,
-                "buy_px": leg["price"] if leg["side"] == "B" else price,
-                "sell_px": price if leg["side"] == "B" else leg["price"],
-                "gross": round(gross, 6), "fees": round(total_fee, 6),
-                "net": round(net, 6), "duration": round(duration, 1),
-            }
-            completed_trips.append(trip)
-            event_log.log_trip(trip_num=round_trips, coin=coin, net_pnl=net)
-            if coin not in coin_trips:
-                coin_trips[coin] = []
-            coin_trips[coin].append(trip)
-            round_trips += 1
-
-            net_sign = "+" if net >= 0 else ""
-            print(f"  >>> TRIP #{round_trips}: {trip['buy_px']:.2f}->{trip['sell_px']:.2f} | Gross: ${gross:.4f} | Fees: ${total_fee:.4f} | Net: {net_sign}${net:.4f} | {duration:.0f}s")
-            tg_send(f"{'✅' if net >= 0 else '❌'} <b>Trip #{round_trips}</b> {coin}\nBuy ${trip['buy_px']:.2f} -> Sell ${trip['sell_px']:.2f}\nGross: ${gross:.4f} | Fees: ${total_fee:.4f}\n<b>Net: {net_sign}${net:.4f}</b> | {duration:.0f}s")
-
-            remaining = size - trip_size
-            if remaining > 0.001:
-                trip_tracker[coin] = {"side": side, "price": price, "size": remaining, "fee": fee * remaining / size, "time": time.time()}
-            else:
-                trip_tracker.pop(coin, None)
-        else:
-            total_size = leg["size"] + size
-            trip_tracker[coin] = {"side": side, "price": leg["price"], "size": total_size, "fee": leg["fee"] + fee, "time": leg["time"]}
-
-        fill = {
-            "time": time.time(),
-            "side": side.lower(),
-            "pair": f"{coin}-PERP",
-            "volume": size,
-            "price": price,
-            "cost": cost,
-            "fee": fee,
-            "closed_pnl": closed_pnl,
-        }
-        all_fills.append(fill)
-        total_trade_count += 1
-        event_log.log_fill(coin=coin, side=side.lower(), size=size, price=price, fee=fee, closed_pnl=closed_pnl)
-        event_log.log_custom("fill_context", coin=coin, edge_bps=round(edge_bps, 2), mid=round(fill_mid, 6), build_id=BUILD_ID)
-        track_volume(cost)
-
-        for p in PAIRS:
-            if coin in p:
-                pair_fills[p].append(fill)
-                pair_trade_count[p] += 1
-                break
 
 
 def main():
@@ -2058,35 +1844,32 @@ def main():
     tg_cmd.start()
 
     tg_send(f"🚀 <b>Hyperliquid Bot Started</b>\n{'TESTNET' if USE_TESTNET else 'MAINNET'}\nPairs: {', '.join(PAIRS)}\nSize: ${ORDER_SIZE_USD}/side | Spread: {MIN_SPREAD_BPS}bps | Event-driven")
-    event_log.log_start(exchange="hyperliquid", pairs=PAIRS, order_size_usd=ORDER_SIZE_USD, mode=PROFITABILITY_MODE, build_id=BUILD_ID)
 
     cycle_count = 0
     last_status_tg = time.time()
     last_account_refresh = 0
-    last_orders_reconcile = 0  # periodic REST open_orders reconciliation
-    ORDERS_RECONCILE_SECS = 60  # only fetch open_orders from REST every 60s
-    FILL_DEBOUNCE_SECS = 2.0  # batch fills for 2s before reacting
-    last_fill_cycle = 0  # timestamp of last fill-triggered cycle
 
     while running:
         try:
-            # Wait for fills or 30s periodic refresh
-            triggered = fill_received.wait(timeout=30.0)
+            # Wait for book change or timeout (max 5s for account refresh/status)
+            triggered = book_changed.wait(timeout=5.0)
             if not running:
                 break
-            fill_received.clear()
+            book_changed.clear()
+
+            # Throttle: don't run cycle if all coins were quoted recently
             now = time.time()
+            all_recent = True
+            quote_interval = get_quote_interval()
+            for coin in [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]:
+                last_t = last_quote_time.get(coin, 0)
+                if now - last_t >= quote_interval:
+                    all_recent = False
+                    break
+            if all_recent:
+                continue  # skip this cycle, all coins quoted recently
 
-            # Fill debounce: if woken by fill, wait 2s to batch rapid fills
-            if triggered and now - last_fill_cycle < FILL_DEBOUNCE_SECS:
-                continue  # skip this cycle, let fills accumulate
-            if triggered:
-                last_fill_cycle = now
-
-            # Process WS fills (replaces redundant REST user_fills)
-            _process_ws_fills(info, exchange, address)
-
-            # Refresh account state periodically (every 30s)
+            # Refresh account state periodically (every 30s to save API calls)
             if now - last_account_refresh > 30:
                 get_account_state(info, address)
                 last_account_refresh = now
@@ -2113,7 +1896,6 @@ def main():
         except Exception as e:
             print(f"Error: {e}")
             tg_send(f"⚠️ <b>Error</b>: {e}")
-            event_log.log_error(str(e))
             import traceback
             traceback.print_exc()
             time.sleep(2)  # back off on error
@@ -2124,7 +1906,6 @@ def main():
     write_status()
     pv = portfolio_value()
     print(f"\nFinal Portfolio: ${pv:.2f} | Fills: {total_trade_count}")
-    event_log.log_stop(portfolio=pv, fills=total_trade_count)
     tg_send(f"🛑 <b>HL Bot Stopped</b>\nPortfolio: ${pv:.2f} | Fills: {total_trade_count}")
 
 
