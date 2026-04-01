@@ -234,6 +234,8 @@ def get_drift_thresholds():
         return 10, 18  # conservative
     return QUEUE_KEEP_BPS, REPLACE_BPS  # normal
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
+TAKER_FEE_BPS = 3.5  # Hyperliquid taker fee - AVOID THIS
+MAKER_ONLY = True  # Never place orders that would cross the spread
 MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
 MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 6.0 bps
 MIN_TRIP_NET_USD = 0.01  # hard floor: skip setups where expected net < $0.01
@@ -257,6 +259,7 @@ TICK_SIZE = {}  # populated dynamically by fetch_asset_metadata()
 ws_book = {}  # coin -> {"bids": [...], "asks": [...], "ts": time}
 ws_book_lock = threading.Lock()
 ws_fills_pending = []  # new fills from WS
+ws_subscribe_time = 0  # set when WS userFills subscribed, used to filter startup replays
 ws_fills_lock = threading.Lock()
 # Event-driven: signal when book changes materially
 book_changed = threading.Event()
@@ -445,6 +448,8 @@ def setup_exchange():
         print(f"  WS subscribed: {coin} l2Book + trades")
 
     # Subscribe to user fills
+    global ws_subscribe_time
+    ws_subscribe_time = time.time()
     info.subscribe({"type": "userFills", "user": address}, on_user_fills)
     print(f"  WS subscribed: userFills")
 
@@ -980,8 +985,8 @@ def _get_cached_orders(info, address):
     return _cached_orders
 
 
-MAX_QUOTE_PAIRS = 2  # only quote the top N ranked pairs per cycle
-MIN_SCORE_THRESHOLD = -2.0  # allow exit-only pairs with moderate negative score
+MAX_QUOTE_PAIRS = 4  # quote top 4 ranked pairs per cycle  # only quote the top N ranked pairs per cycle
+MIN_SCORE_THRESHOLD = -12.0  # allow exit-only pairs with moderate negative score
 
 
 def check_weak_pair(coin):
@@ -1004,10 +1009,13 @@ def check_weak_pair(coin):
         recent = trips[-WEAK_PAIR_LOOKBACK:]
         net_sum = sum(t["net"] for t in recent)
         winners = sum(1 for t in recent if t["net"] >= 0)
+        avg_fees = sum(t.get("fees", 0) for t in recent) / len(recent)
+        avg_gross = sum(abs(t.get("gross", 0)) for t in recent) / len(recent)
+        fee_ratio = avg_fees / avg_gross if avg_gross > 0 else 999
         if net_sum < 0 and winners < WEAK_PAIR_LOOKBACK * 0.4:
             # Last 10 trips are net negative with <40% win rate — suspend
             weak_pair_suspended[coin] = now + WEAK_PAIR_SUSPEND_SECS
-            return True, f"SUSPENDED: last {WEAK_PAIR_LOOKBACK} trips net ${net_sum:.4f}, WR {winners}/{WEAK_PAIR_LOOKBACK}"
+            return True, f"SUSPENDED: last {WEAK_PAIR_LOOKBACK} trips net ${net_sum:.4f}, WR {winners}/{WEAK_PAIR_LOOKBACK} FeeR:{fee_ratio:.2f}"
 
     return False, ""
 
@@ -1321,7 +1329,7 @@ def run_cycle(info, exchange, address):
         inv_extra_skew = 0.0
 
         # Per-coin inventory cap: block entry side when over limits
-        max_inv_equity = account_value * 0.20  # 20% of equity per coin
+        max_inv_equity = account_value * 0.10  # 10% of equity per coin (tighter cap = faster rebalance)
         effective_inv_cap = min(MAX_INVENTORY_USD, max_inv_equity)
         if pos_usd > effective_inv_cap:
             if pos_size > 0:
@@ -1365,26 +1373,56 @@ def run_cycle(info, exchange, address):
                     try: cancel_order(exchange, coin, o["oid"])
                     except: pass
                 try:
-                    _api_call(exchange.market_close, coin)
-                except: pass
+                    book = get_ws_book(coin)
+                    if book and pos_size != 0:
+                        close_sz = abs(pos_size)
+                        tick = TICK_SIZE.get(coin, 0.01)
+                        if pos_size > 0:
+                            close_px = round(book["bid"] - tick, PRICE_DECIMALS.get(coin, 2))
+                            _api_call(exchange.order, coin, False, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        else:
+                            close_px = round(book["ask"] + tick, PRICE_DECIMALS.get(coin, 2))
+                            _api_call(exchange.order, coin, True, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        print(f"  {coin} limit close @ {close_px}")
+                    else:
+                        _api_call(exchange.market_close, coin)
+                except Exception as e:
+                    print(f"  {coin} overweight limit close error: {e}")
+                    try: _api_call(exchange.market_close, coin)
+                    except: pass
                 live_quotes.pop(coin, None)
                 continue
 
-            if hold_secs > 300:
-                # 5+ minutes: force market close
-                print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing")
+            if hold_secs > 600:  # 10min: force close (limit, not market)
+                # 5+ minutes: force close with LIMIT order (avoid taker fees)
+                print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing (limit)")
                 for o in coin_orders:
                     try: cancel_order(exchange, coin, o["oid"])
                     except: pass
                 try:
-                    _api_call(exchange.market_close, coin)
-                except: pass
+                    book = get_ws_book(coin)
+                    if book and pos_size != 0:
+                        close_sz = abs(pos_size)
+                        tick = TICK_SIZE.get(coin, 0.01)
+                        if pos_size > 0:
+                            close_px = round(book["bid"] - tick, PRICE_DECIMALS.get(coin, 2))
+                            _api_call(exchange.order, coin, False, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        else:
+                            close_px = round(book["ask"] + tick, PRICE_DECIMALS.get(coin, 2))
+                            _api_call(exchange.order, coin, True, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
+                        print(f"  {coin} limit close @ {close_px}")
+                    else:
+                        _api_call(exchange.market_close, coin)
+                except Exception as e:
+                    print(f"  {coin} limit close error: {e}, fallback market_close")
+                    try: _api_call(exchange.market_close, coin)
+                    except: pass
                 # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
                 continue
             elif hold_secs > 120 or overweight_ratio > 2.0:
                 # 2+ minutes OR 2x+ over cap: max exit urgency
-                inv_extra_skew = max(inv_extra_skew, 8.0)
+                inv_extra_skew = max(inv_extra_skew, 14.0)  # very aggressive exit urgency at 2min+
 
         if is_exit_only:
             # Score below threshold — only allow the exit side
@@ -1474,7 +1512,7 @@ def run_cycle(info, exchange, address):
         target_spread = fair_mid * spread_bps / 10000
 
         # Stronger inventory skew: push quotes harder toward flattening
-        INVENTORY_SKEW_BPS = 6.0  # reduced: 12 was too aggressive
+        INVENTORY_SKEW_BPS = 12.0  # aggressive: push quotes away from inventory fast
         skew_bps = inv_ratio * INVENTORY_SKEW_BPS
         skew_px = mid * skew_bps / 10000.0
 
@@ -1515,46 +1553,44 @@ def run_cycle(info, exchange, address):
             inventory_samples.pop(0)
 
         if spread_ticks >= required_ticks:
-            # Queue-aware pennying: step inside crowded levels, join thin ones
-            # NEVER penny when spread is too tight — causes post-only crossing
+            # MAKER-FIRST: never penny inside the spread — capture the full spread
+            # Join best bid/ask to maintain queue priority without sacrificing edge
+            # Only penny 1 tick if spread is very wide (>3x required) and queue is deep
             bid_sz = price_data.get("bid_size", 0)
             ask_sz = price_data.get("ask_size", 0)
-            if spread_ticks <= 2:
-                # Spread is 1-2 ticks: join best_bid/best_ask, no pennying
+            if spread_ticks <= required_ticks + 2:
+                # Spread is barely profitable: join best levels, don't sacrifice edge
                 bid_step = 0
                 ask_step = 0
+            elif spread_ticks >= required_ticks * 3:
+                # Very wide spread: penny 1 tick ONLY if queue is deep (>10 units)
+                bid_step = 1 if bid_sz > 10 else 0
+                ask_step = 1 if ask_sz > 10 else 0
             else:
-                # Penny (step inside) if top level has a wall; join if thin
-                bid_step = 1 if bid_sz > 5 else 0  # >5 units = crowded, penny to jump
-                ask_step = 1 if ask_sz > 5 else 0
-                if spread_ticks >= required_ticks + 3:
-                    bid_step = min(bid_step + 1, 2)
-                    ask_step = min(ask_step + 1, 2)
-                # Cap pennying so we never consume more than half the spread
-                max_step = max((spread_ticks - 1) // 2, 0)
-                bid_step = min(bid_step, max_step)
-                ask_step = min(ask_step, max_step)
+                # Normal spread: join best bid/ask, no pennying
+                bid_step = 0
+                ask_step = 0
             buy_price = round(best_bid + bid_step * tick, p_dec)
             sell_price = round(best_ask - ask_step * tick, p_dec)
-            buy_reason = f"penny x{bid_step}" if bid_step > 0 else "join bid"
-            sell_reason = f"penny x{ask_step}" if ask_step > 0 else "join ask"
+            buy_reason = f"join+{bid_step}" if bid_step > 0 else "join bid"
+            sell_reason = f"join+{ask_step}" if ask_step > 0 else "join ask"
         elif pos_size != 0:
             # Spread too tight BUT we have inventory — allow exit side only
             # Step inside spread aggressively for the exit side
             quotes_skipped_profitability += 1
             if pos_size > 0:
-                # LONG: need to sell to exit — penny the ask aggressively
+                # LONG: need to sell to exit — join the ask (no penny, stay maker)
                 allow_buy = False
                 buy_price = best_bid  # placeholder, won't be used
-                sell_price = round(best_ask - tick, p_dec)  # step inside ask
+                sell_price = round(best_ask, p_dec)  # join ask, stay maker
                 buy_reason = "gated"
                 sell_reason = "exit-penny"
                 print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, sell-only exit")
             else:
-                # SHORT: need to buy to exit — penny the bid aggressively
+                # SHORT: need to buy to exit — join the bid (no penny, stay maker)
                 allow_sell = False
                 sell_price = best_ask  # placeholder, won't be used
-                buy_price = round(best_bid + tick, p_dec)  # step inside bid
+                buy_price = round(best_bid, p_dec)  # join bid, stay maker
                 buy_reason = "exit-penny"
                 sell_reason = "gated"
                 print(f"  TIGHT-SPREAD EXIT: {mkt_spread_bps:.1f}bps < {required_bps:.1f}bps, buy-only exit")
@@ -1882,6 +1918,23 @@ def _process_ws_fills(info, exchange, address):
         pending = list(ws_fills_pending)
         ws_fills_pending.clear()
 
+    if not pending:
+        return
+
+    # Filter out startup replay fills (fills older than when WS subscribed)
+    if ws_subscribe_time > 0:
+        filtered = []
+        for pf in pending:
+            fill_time_ms = int(pf.get("time", 0))
+            fill_time_s = fill_time_ms / 1000 if fill_time_ms > 1e12 else fill_time_ms
+            if fill_time_s >= ws_subscribe_time - 5:  # 5s grace
+                filtered.append(pf)
+            else:
+                coin = pf.get("coin", "?")
+                print(f"  >>> SKIP REPLAY: {coin} fill from before subscribe time")
+        if len(filtered) < len(pending):
+            print(f"  >>> Filtered {len(pending) - len(filtered)} replay fills, processing {len(filtered)} new")
+        pending = filtered
     if not pending:
         return
 

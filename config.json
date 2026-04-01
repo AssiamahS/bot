@@ -4,8 +4,16 @@
     "use_testnet": false,
     "tg_token": "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU",
     "tg_chat_id": "8727843043",
-    "pairs": ["ETH-PERP", "SOL-PERP", "BTC-PERP", "FET-PERP"],
+    "pairs": [
+        "FET-PERP",
+        "BLUR-PERP",
+        "ARK-PERP",
+        "APE-PERP",
+        "HYPE-PERP",
+        "PENDLE-PERP"
+    ],
     "order_size_usd": 10.0,
     "refresh_secs": 5,
-    "min_spread_bps": 5
+    "min_spread_bps": 5,
+    "safety_bps_strict": 2.0
 }
