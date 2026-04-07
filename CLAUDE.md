@@ -4,7 +4,7 @@
 Read STATUS.md before making any changes to understand current state.
 
 ## Connection
-- VPS: ubuntu@54.234.75.223
+- VPS: ubuntu@44.205.58.31 (Elastic IP)
 - SSH key: ~/.ssh/hl-bot-key.pem
 - Bot code: ~/hyperliquid-sol/ on VPS
 - Main file: trader.py | Config: config.json

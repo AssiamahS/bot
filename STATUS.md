@@ -8,11 +8,11 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `slywatch-snapshots` (off `restore_features`) |
-| **Running on VPS** | `ubuntu@54.234.75.223:~/hyperliquid-sol/` |
+| **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
 | **Bot status** | RUNNING |
 | **Profitable?** | Under evaluation |
 | **Slywatch** | ACTIVE — auto-commit + auto-push to GitHub |
-| **Last updated** | 2026-03-16 |
+| **Last updated** | 2026-04-04 |
 
 ## Current Strategy
 
@@ -32,6 +32,15 @@
 5. **Net vs gross inventory** — signed `sz` used instead of `abs(sz)` (trader.py:725)
 6. **Double API call per cycle** — `get_account_state` called twice (trader.py:902 + 1416)
 7. **Misleading field name** — `withdrawable` stores `totalNtlPos` (trader.py:469)
+
+## Latest Session (2026-04-04)
+
+- Added orphan inventory cleanup in `trader.py` to prevent stale positions outside configured `PAIRS` from being ignored.
+- New config controls:
+	- `orphan_position_mode`: `close` (default) / `alert` / `ignore`
+	- `orphan_close_retry_secs`: throttle between close attempts
+	- `orphan_exempt_coins`: allowlist for manual holds
+- Cleanup runs before quote logic and also during pause/cooldown paths.
 
 ## Recent Sessions
 
