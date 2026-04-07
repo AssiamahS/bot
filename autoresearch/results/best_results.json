@@ -1,0 +1,120 @@
+{
+  "generation": 85,
+  "train": {
+    "BTC": {
+      "final_equity": 97.68,
+      "pnl_pct": -2.32,
+      "sharpe": -3.9218,
+      "sortino": -1.7709,
+      "max_drawdown_pct": 3.31,
+      "total_trades": 186,
+      "win_rate": 53.23,
+      "avg_win": 0.4968,
+      "avg_loss": -0.6026,
+      "profit_factor": 0.9381
+    },
+    "ETH": {
+      "final_equity": 98.47,
+      "pnl_pct": -1.53,
+      "sharpe": -2.0731,
+      "sortino": -1.0341,
+      "max_drawdown_pct": 3.43,
+      "total_trades": 216,
+      "win_rate": 49.54,
+      "avg_win": 0.6198,
+      "avg_loss": -0.5884,
+      "profit_factor": 1.0339
+    },
+    "SOL": {
+      "final_equity": 101.98,
+      "pnl_pct": 1.98,
+      "sharpe": 2.2129,
+      "sortino": 1.0064,
+      "max_drawdown_pct": 1.92,
+      "total_trades": 193,
+      "win_rate": 60.1,
+      "avg_win": 0.7628,
+      "avg_loss": -0.906,
+      "profit_factor": 1.2685
+    },
+    "aggregate": {
+      "avg_sharpe": -1.2607,
+      "avg_pnl_pct": -0.62,
+      "avg_max_dd": 2.89,
+      "avg_win_rate": 54.29,
+      "total_trades": 595
+    }
+  },
+  "test": {
+    "BTC": {
+      "final_equity": 97.81,
+      "pnl_pct": -2.19,
+      "sharpe": -5.2875,
+      "sortino": -2.7339,
+      "max_drawdown_pct": 3.47,
+      "total_trades": 167,
+      "win_rate": 48.5,
+      "avg_win": 0.4135,
+      "avg_loss": -0.4301,
+      "profit_factor": 0.9055
+    },
+    "ETH": {
+      "final_equity": 99.53,
+      "pnl_pct": -0.47,
+      "sharpe": -0.857,
+      "sortino": -0.4238,
+      "max_drawdown_pct": 2.35,
+      "total_trades": 132,
+      "win_rate": 50.76,
+      "avg_win": 0.6784,
+      "avg_loss": -0.6423,
+      "profit_factor": 1.0886
+    },
+    "SOL": {
+      "final_equity": 98.47,
+      "pnl_pct": -1.53,
+      "sharpe": -3.0623,
+      "sortino": -1.2319,
+      "max_drawdown_pct": 2.1,
+      "total_trades": 131,
+      "win_rate": 56.49,
+      "avg_win": 0.5146,
+      "avg_loss": -0.6981,
+      "profit_factor": 0.957
+    },
+    "aggregate": {
+      "avg_sharpe": -3.0689,
+      "avg_pnl_pct": -1.4,
+      "avg_max_dd": 2.64,
+      "avg_win_rate": 51.92,
+      "total_trades": 430
+    }
+  },
+  "mc": {
+    "BTC": {
+      "mc_mean_sharpe": -9.87,
+      "mc_median_sharpe": -10.0645,
+      "mc_5th_pct_sharpe": -14.1933,
+      "mc_95th_pct_sharpe": -5.8327,
+      "mc_stability": NaN,
+      "mc_n_sims": 50
+    },
+    "ETH": {
+      "mc_mean_sharpe": -11.0496,
+      "mc_median_sharpe": -10.9758,
+      "mc_5th_pct_sharpe": -14.7418,
+      "mc_95th_pct_sharpe": -6.4409,
+      "mc_stability": NaN,
+      "mc_n_sims": 50
+    },
+    "SOL": {
+      "mc_mean_sharpe": -8.5483,
+      "mc_median_sharpe": -8.8767,
+      "mc_5th_pct_sharpe": -11.5124,
+      "mc_95th_pct_sharpe": -5.0582,
+      "mc_stability": NaN,
+      "mc_n_sims": 50
+    }
+  },
+  "timestamp": "2026-04-07T22:52:44.729485+00:00"
+}
