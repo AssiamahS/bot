@@ -27,6 +27,7 @@ from event_logger import EventLogger
 
 # === SINGLETON LOCK: prevent multiple instances ===
 import fcntl
+import atexit
 _lock_file = open("/tmp/trader.lock", "w")
 try:
     fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -35,6 +36,16 @@ try:
 except IOError:
     print("ERROR: Another trader instance is already running. Exiting.")
     sys.exit(1)
+
+def _cleanup_lock():
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_UN)
+        _lock_file.close()
+        os.remove("/tmp/trader.lock")
+    except Exception:
+        pass
+
+atexit.register(_cleanup_lock)
 
 # === EVENT LOGGER ===
 BUILD_ID = "git:b67fe43fe"
@@ -161,6 +172,96 @@ MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
 
+# Delta hedger: monitor portfolio-level directional exposure and flatten when too skewed
+HEDGE_DELTA_THRESHOLD_PCT = 10.0  # trigger hedge when net delta > 10% of equity
+HEDGE_MAX_DELTA_PCT = 20.0  # hard limit: block new entries above this
+HEDGE_COOLDOWN_SECS = 60  # minimum seconds between hedge actions
+_last_hedge_time = 0
+
+def check_and_hedge(info, exchange, address):
+    """Check portfolio delta and reduce the most imbalanced position if needed.
+    Uses limit orders (maker) to avoid taker fees."""
+    global _last_hedge_time
+    now = time.time()
+    if now - _last_hedge_time < HEDGE_COOLDOWN_SECS:
+        return
+
+    equity = portfolio_value()
+    if equity <= 0:
+        return
+
+    positions = last_balances.get("positions", {})
+    if not positions:
+        return
+
+    # Compute net delta (signed notional across all positions)
+    net_delta = 0.0
+    per_coin = {}
+    for coin, pos in positions.items():
+        sz = pos.get("size", 0)
+        mid = 0
+        # Get mid from ws_book or last_prices
+        book = get_ws_book(coin)
+        if book:
+            mid = book["mid"]
+        else:
+            for p in PAIRS:
+                if coin in p and p in last_prices:
+                    mid = last_prices[p].get("mid", 0)
+                    break
+        if mid <= 0:
+            continue
+        signed_ntl = sz * mid
+        net_delta += signed_ntl
+        per_coin[coin] = {"signed_ntl": signed_ntl, "size": sz, "mid": mid}
+
+    delta_pct = abs(net_delta) / equity * 100
+    if delta_pct < HEDGE_DELTA_THRESHOLD_PCT:
+        return
+
+    # Find the coin contributing most to the imbalance
+    # Sort by absolute contribution, reduce the biggest offender
+    sorted_coins = sorted(per_coin.items(), key=lambda x: abs(x[1]["signed_ntl"]), reverse=True)
+
+    for coin, data in sorted_coins:
+        signed_ntl = data["signed_ntl"]
+        # Only reduce positions that are in the same direction as net delta
+        if (net_delta > 0 and signed_ntl <= 0) or (net_delta < 0 and signed_ntl >= 0):
+            continue
+
+        sz = data["size"]
+        mid = data["mid"]
+        s_dec = SIZE_DECIMALS.get(coin, 2)
+        p_dec = PRICE_DECIMALS.get(coin, 2)
+        tick = TICK_SIZE.get(coin, 0.01)
+
+        # Reduce by 50% of this position (don't close entirely, just reduce delta)
+        reduce_sz = round(abs(sz) * 0.5, s_dec)
+        if reduce_sz * mid < 1.0:
+            continue  # too small to bother
+
+        book = get_ws_book(coin)
+        if not book:
+            continue
+
+        if sz > 0:
+            # Long: sell to reduce
+            hedge_px = round(book["best_bid"], p_dec)  # sell at bid for faster fill
+            oid = place_order(exchange, coin, False, reduce_sz, hedge_px, reduce_only=True)
+            side_str = "reducing LONG"
+        else:
+            # Short: buy to reduce
+            hedge_px = round(book["best_ask"], p_dec)  # buy at ask for faster fill
+            oid = place_order(exchange, coin, True, reduce_sz, hedge_px, reduce_only=True)
+            side_str = "reducing SHORT"
+
+        _last_hedge_time = now
+        print(f"  >>> HEDGE: delta={delta_pct:.1f}%, {side_str} {coin} {reduce_sz} @ ${hedge_px}")
+        tg_send(f"🔄 <b>HEDGE</b>: delta={delta_pct:.1f}%, {side_str} {coin}\nSize: {reduce_sz} @ ${hedge_px}")
+        event_log.log_custom("hedge", coin=coin, delta_pct=round(delta_pct, 1), reduce_sz=reduce_sz, side=side_str)
+        break  # one hedge per cycle
+
+
 # Multi-quote state: track our resting orders per coin
 live_quotes = {}
 round_trips = 0  # completed buy+sell cycles
@@ -190,22 +291,25 @@ last_profitability_diag = {"market_spread_bps": 0.0, "required_bps": 0.0, "marke
 # Hyperliquid limit: 1200 requests/min per IP. We use 600/min (50% safety margin).
 MAX_REQUESTS_PER_MIN = 600
 _request_timestamps = deque()
+_rate_limit_lock = threading.Lock()  # thread safety: WS callbacks + main loop both access timestamps
 request_count = 0  # lifetime counter for dashboard
 volume_traded_usd = 0.0
 request_budget_paused = False
 
 def rate_limiter_check():
     """Return True if we can make another request within the rate limit."""
-    now = time.time()
-    while _request_timestamps and now - _request_timestamps[0] > 60:
-        _request_timestamps.popleft()
-    return len(_request_timestamps) < MAX_REQUESTS_PER_MIN
+    with _rate_limit_lock:
+        now = time.time()
+        while _request_timestamps and now - _request_timestamps[0] > 60:
+            _request_timestamps.popleft()
+        return len(_request_timestamps) < MAX_REQUESTS_PER_MIN
 
 def rate_limiter_record():
     """Record a request timestamp."""
     global request_count
-    _request_timestamps.append(time.time())
-    request_count += 1
+    with _rate_limit_lock:
+        _request_timestamps.append(time.time())
+        request_count += 1
 
 def track_request():
     """Track an API request (for calls not going through _api_call)."""
@@ -217,10 +321,11 @@ def track_volume(usd_amount):
 
 def request_budget_remaining():
     """Requests remaining in current 60s window."""
-    now = time.time()
-    while _request_timestamps and now - _request_timestamps[0] > 60:
-        _request_timestamps.popleft()
-    return MAX_REQUESTS_PER_MIN - len(_request_timestamps)
+    with _rate_limit_lock:
+        now = time.time()
+        while _request_timestamps and now - _request_timestamps[0] > 60:
+            _request_timestamps.popleft()
+        return MAX_REQUESTS_PER_MIN - len(_request_timestamps)
 
 # Queue-preserving quoting: two-tier drift thresholds
 QUEUE_KEEP_BPS = 8    # keep resting order if drift <= this (preserve queue position)
@@ -236,16 +341,18 @@ def get_drift_thresholds():
 MAKER_FEE_BPS = 1.5  # Hyperliquid maker fee at our volume tier
 TAKER_FEE_BPS = 3.5  # Hyperliquid taker fee - AVOID THIS
 MAKER_ONLY = True  # Never place orders that would cross the spread
-MIN_PROFIT_BPS = 3.0  # raised: minimum profit per round trip after fees
-MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 6.0 bps
-MIN_TRIP_NET_USD = 0.01  # hard floor: skip setups where expected net < $0.01
+MIN_PROFIT_BPS = 5.0  # minimum profit per round trip after fees (raised from 3.0)
+MIN_CAPTURE_BPS = 2 * MAKER_FEE_BPS + MIN_PROFIT_BPS  # = 8.0 bps
+MIN_TRIP_NET_USD = 0.005  # hard floor: skip setups where expected net < $0.005
 QUOTE_LEVELS = 1  # single level per side until consistently profitable
 LEVEL_SPACING_TICKS = 2  # ticks between levels (only used if QUOTE_LEVELS > 1)
 
-# Weak pair suspension: if last N trips on a coin are net negative, suspend it
-WEAK_PAIR_LOOKBACK = 10  # check last 10 trips per coin
-WEAK_PAIR_SUSPEND_SECS = 900  # suspend for 15 minutes
+# Weak pair suspension: escalating — gets longer each time a coin re-fails
+WEAK_PAIR_LOOKBACK = 5  # trigger faster: only need 5 trips to evaluate
+WEAK_PAIR_BASE_SUSPEND = 900  # 15 min first offense
+WEAK_PAIR_MAX_SUSPEND = 7200  # 2 hour max suspension
 weak_pair_suspended = {}  # coin -> resume_timestamp
+weak_pair_strikes = {}  # coin -> number of times suspended (escalation counter)
 # Per-coin trip history for weak pair detection
 coin_trips = {}  # coin -> list of completed trip dicts
 
@@ -781,14 +888,17 @@ def check_fills(info, exchange, address):
                     tg_msg += f"\n⚠️ ADVERSE: {consec}x{side} - paused 30s"
                 tg_send(tg_msg)
 
-                # Strategy pause: if last 20 trips avg net < 0, pause 60s
-                if len(completed_trips) >= 20:
-                    recent_20 = completed_trips[-20:]
-                    avg_recent = sum(t["net"] for t in recent_20) / 20
+                # Strategy pause: escalating — 5min base, doubles each consecutive trigger, 30min cap
+                if len(completed_trips) >= 10:
+                    recent_n = completed_trips[-10:]
+                    avg_recent = sum(t["net"] for t in recent_n) / len(recent_n)
                     if avg_recent < 0 and now_fill > strategy_pause_until:
-                        strategy_pause_until = now_fill + 60
-                        print(f"  >>> STRATEGY PAUSE: last 20 trips avg net ${avg_recent:.4f} < 0, pausing 60s")
-                        tg_send(f"⏸️ <b>STRATEGY PAUSE</b>\nLast 20 trips avg: ${avg_recent:.4f}\nPausing new quotes 60s")
+                        strategy_pause_count = getattr(sys.modules[__name__], '_strategy_pause_count', 0) + 1
+                        sys.modules[__name__]._strategy_pause_count = strategy_pause_count
+                        pause_secs = min(300 * (2 ** (strategy_pause_count - 1)), 1800)  # 5m -> 10m -> 20m -> 30m cap
+                        strategy_pause_until = now_fill + pause_secs
+                        print(f"  >>> STRATEGY PAUSE #{strategy_pause_count}: last 10 trips avg net ${avg_recent:.4f} < 0, pausing {pause_secs//60}min")
+                        tg_send(f"⏸️ <b>STRATEGY PAUSE #{strategy_pause_count}</b>\nLast 10 trips avg: ${avg_recent:.4f}\nPausing {pause_secs//60}min")
 
                 # --- ROUND TRIP TRACKING ---
                 leg = trip_tracker.get(coin)
@@ -985,12 +1095,13 @@ def _get_cached_orders(info, address):
     return _cached_orders
 
 
-MAX_QUOTE_PAIRS = 4  # quote top 4 ranked pairs per cycle  # only quote the top N ranked pairs per cycle
+MAX_QUOTE_PAIRS = 2  # only quote top 2 — focus beats diversification at this account size
 MIN_SCORE_THRESHOLD = -12.0  # allow exit-only pairs with moderate negative score
 
 
 def check_weak_pair(coin):
     """Check if a coin should be suspended based on recent trip performance.
+    Escalating: each re-suspension doubles the timeout (15m -> 30m -> 1h -> 2h cap).
     Returns (is_suspended, reason_string)."""
     now = time.time()
 
@@ -999,7 +1110,8 @@ def check_weak_pair(coin):
         resume_at = weak_pair_suspended[coin]
         if now < resume_at:
             remaining = int(resume_at - now)
-            return True, f"suspended {remaining}s (weak)"
+            strikes = weak_pair_strikes.get(coin, 1)
+            return True, f"suspended {remaining}s (weak, strike {strikes})"
         else:
             del weak_pair_suspended[coin]
 
@@ -1012,10 +1124,22 @@ def check_weak_pair(coin):
         avg_fees = sum(t.get("fees", 0) for t in recent) / len(recent)
         avg_gross = sum(abs(t.get("gross", 0)) for t in recent) / len(recent)
         fee_ratio = avg_fees / avg_gross if avg_gross > 0 else 999
+
         if net_sum < 0 and winners < WEAK_PAIR_LOOKBACK * 0.4:
-            # Last 10 trips are net negative with <40% win rate — suspend
-            weak_pair_suspended[coin] = now + WEAK_PAIR_SUSPEND_SECS
-            return True, f"SUSPENDED: last {WEAK_PAIR_LOOKBACK} trips net ${net_sum:.4f}, WR {winners}/{WEAK_PAIR_LOOKBACK} FeeR:{fee_ratio:.2f}"
+            # Escalating suspension: doubles each time
+            strikes = weak_pair_strikes.get(coin, 0) + 1
+            weak_pair_strikes[coin] = strikes
+            suspend_secs = min(WEAK_PAIR_BASE_SUSPEND * (2 ** (strikes - 1)), WEAK_PAIR_MAX_SUSPEND)
+            weak_pair_suspended[coin] = now + suspend_secs
+            tg_send(f"⏸️ <b>WEAK PAIR</b> {coin}: strike {strikes}\nLast {WEAK_PAIR_LOOKBACK} trips: ${net_sum:.4f} WR:{winners}/{WEAK_PAIR_LOOKBACK}\nSuspended {suspend_secs//60}min")
+            return True, f"SUSPENDED: strike {strikes} ({suspend_secs//60}min) | last {WEAK_PAIR_LOOKBACK} trips net ${net_sum:.4f}, WR {winners}/{WEAK_PAIR_LOOKBACK} FeeR:{fee_ratio:.2f}"
+
+    # If a coin comes back from suspension and wins, reduce strikes
+    if coin in weak_pair_strikes and len(trips) >= WEAK_PAIR_LOOKBACK:
+        recent = trips[-WEAK_PAIR_LOOKBACK:]
+        winners = sum(1 for t in recent if t["net"] >= 0)
+        if winners >= WEAK_PAIR_LOOKBACK * 0.6:  # 60%+ win rate = redemption
+            weak_pair_strikes[coin] = max(0, weak_pair_strikes[coin] - 1)
 
     return False, ""
 
@@ -1111,6 +1235,9 @@ def run_cycle(info, exchange, address):
     active_orders = []  # rebuild for dashboard
     positions = last_balances.get("positions", {})
 
+    # === DELTA HEDGE CHECK ===
+    check_and_hedge(info, exchange, address)
+
     # === PHASE 1: Score and rank all pairs ===
     pair_scores = []
     pair_data = {}  # cache price_data per pair for phase 2
@@ -1123,16 +1250,24 @@ def run_cycle(info, exchange, address):
         # Check weak pair suspension first
         is_suspended, suspend_reason = check_weak_pair(coin)
         if is_suspended:
-            print(f"\n  {coin} | {suspend_reason}")
-            quotes_skipped_weak += 1
-            # Cancel any resting orders on suspended pairs
-            coin_orders = current_orders.get(coin, [])
-            for o in coin_orders:
-                try:
-                    cancel_order(exchange, coin, o["oid"])
-                except: pass
-            live_quotes.pop(coin, None)
-            continue
+            # Check if we have inventory that needs unwinding
+            pos = positions.get(coin, {})
+            pos_size = pos.get("size", 0)
+            if pos_size != 0:
+                # Weak but holding inventory — force into exit-only mode, don't skip
+                print(f"\n  {coin} | {suspend_reason} | INVENTORY ${abs(pos_size) * (get_ws_book(coin) or {}).get('mid', 0):.2f} — exit-only")
+                # Will be handled as exit-only in phase 2 via exit_only_pairs
+            else:
+                print(f"\n  {coin} | {suspend_reason}")
+                quotes_skipped_weak += 1
+                # Cancel any resting orders on suspended pairs with no inventory
+                coin_orders = current_orders.get(coin, [])
+                for o in coin_orders:
+                    try:
+                        cancel_order(exchange, coin, o["oid"])
+                    except: pass
+                live_quotes.pop(coin, None)
+                continue
 
         price_data = get_ws_book(coin)
         if not price_data:
@@ -1180,13 +1315,19 @@ def run_cycle(info, exchange, address):
     exit_only_pairs = set()  # pairs where only exit side is allowed
     for i, (pair, coin, score, _) in enumerate(pair_scores):
         has_inventory = coin in positions and positions[coin].get("size", 0) != 0
-        if i < MAX_QUOTE_PAIRS and score >= MIN_SCORE_THRESHOLD:
+        is_weak = coin in weak_pair_suspended and time.time() < weak_pair_suspended[coin]
+        if i < MAX_QUOTE_PAIRS and score >= MIN_SCORE_THRESHOLD and not is_weak:
             quote_pairs.add(pair)
         elif has_inventory:
-            # Score too low for entry, but inventory must be unwound
+            # Score too low, ranked out, or weak-suspended — but inventory must be unwound
             exit_only_pairs.add(pair)
             quote_pairs.add(pair)
-            reason = f"score {score:+.1f} < {MIN_SCORE_THRESHOLD}" if score < MIN_SCORE_THRESHOLD else f"ranked #{i+1} (max {MAX_QUOTE_PAIRS})"
+            if is_weak:
+                reason = "weak-suspended with inventory"
+            elif score < MIN_SCORE_THRESHOLD:
+                reason = f"score {score:+.1f} < {MIN_SCORE_THRESHOLD}"
+            else:
+                reason = f"ranked #{i+1} (max {MAX_QUOTE_PAIRS})"
             print(f"  {coin} | EXIT-ONLY: {reason}, allowing exit side")
         else:
             skip_pairs.add(pair)
@@ -1242,13 +1383,44 @@ def run_cycle(info, exchange, address):
         num_levels = min(QUOTE_LEVELS, max_levels)
         level_size_usd = dynamic_size_usd / num_levels
         size = round(level_size_usd / mid, s_dec)
-        if size * mid < 10.0:
-            size = round(10.5 / mid, s_dec)
+        if size * mid < 10.5:
+            size = round(11.0 / mid, s_dec)  # buffer for step-back pricing
         equity_pct = (size * mid) / account_value * 100 if account_value > 0 else 0
         print(f"  SIZE: ${size * mid:.2f} ({size} {coin}) = {equity_pct:.0f}% of ${account_value:.2f} equity")
 
         # Check current position
         pos = positions.get(coin, {})
+
+        # Small position exit: if position is under $10, market_close it directly
+        # (can't place limit orders under HL's $10 minimum)
+        pos_size_check = pos.get("size", 0)
+        if pos_size_check != 0 and abs(pos_size_check) * mid < 10.0:
+            print(f"  {coin} | SMALL POS EXIT: ${abs(pos_size_check) * mid:.2f} < $10 min, market closing")
+            for o in coin_orders:
+                try: cancel_order(exchange, coin, o["oid"])
+                except: pass
+            try:
+                result = _api_call(exchange.market_close, coin)
+                if result is None:
+                    print(f"  {coin} market_close rate limited, retry next cycle")
+                    continue
+                # Verify closure
+                time.sleep(0.5)
+                get_account_state(info, address)
+                new_pos = last_balances.get("positions", {}).get(coin, {}).get("size", 0)
+                if new_pos == 0:
+                    trip_tracker.pop(coin, None)
+                    print(f"  {coin} small pos closed successfully")
+                else:
+                    print(f"  {coin} still open after market_close (size={new_pos}), will retry")
+            except Exception as e:
+                if "min order size" in str(e).lower() or "too small" in str(e).lower():
+                    trip_tracker.pop(coin, None)
+                    print(f"  {coin} position below min close size, clearing tracker")
+                else:
+                    print(f"  {coin} small pos market_close error: {e}")
+            live_quotes.pop(coin, None)
+            continue
         pos_size = pos.get("size", 0)
         pos_usd = abs(pos_size) * mid
         entry_price = pos.get("entry_price", 0)
@@ -1284,7 +1456,7 @@ def run_cycle(info, exchange, address):
         flow_total = buy_vol + sell_vol
 
         # === STOP-LOSS CHECK ===
-        STOP_LOSS_BPS = 60  # 30 was too tight, triggered on normal volatility
+        STOP_LOSS_BPS = 40  # tightened from 60: on $10 orders, 60bps = $0.06 loss, too much
         if pos_size != 0 and entry_price > 0:
             if pos_size > 0:
                 loss_bps = (entry_price - mid) / entry_price * 10000
@@ -1378,7 +1550,7 @@ def run_cycle(info, exchange, address):
                         close_sz = abs(pos_size)
                         tick = TICK_SIZE.get(coin, 0.01)
                         if pos_size > 0:
-                            close_px = round(book["bid"] - tick, PRICE_DECIMALS.get(coin, 2))
+                            close_px = round(book["best_bid"] - tick, PRICE_DECIMALS.get(coin, 2))
                             _api_call(exchange.order, coin, False, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         else:
                             close_px = round(book["ask"] + tick, PRICE_DECIMALS.get(coin, 2))
@@ -1393,7 +1565,7 @@ def run_cycle(info, exchange, address):
                 live_quotes.pop(coin, None)
                 continue
 
-            if hold_secs > 600:  # 10min: force close (limit, not market)
+            if hold_secs > 300:  # 5min: force close (limit, not market) — was 10min, tightened
                 # 5+ minutes: force close with LIMIT order (avoid taker fees)
                 print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing (limit)")
                 for o in coin_orders:
@@ -1420,9 +1592,9 @@ def run_cycle(info, exchange, address):
                 # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
                 continue
-            elif hold_secs > 120 or overweight_ratio > 2.0:
-                # 2+ minutes OR 2x+ over cap: max exit urgency
-                inv_extra_skew = max(inv_extra_skew, 14.0)  # very aggressive exit urgency at 2min+
+            elif hold_secs > 60 or overweight_ratio > 2.0:
+                # 1+ minutes OR 2x+ over cap: max exit urgency (was 2min, tightened)
+                inv_extra_skew = max(inv_extra_skew, 14.0)
 
         if is_exit_only:
             # Score below threshold — only allow the exit side
@@ -1553,27 +1725,30 @@ def run_cycle(info, exchange, address):
             inventory_samples.pop(0)
 
         if spread_ticks >= required_ticks:
-            # MAKER-FIRST: never penny inside the spread — capture the full spread
-            # Join best bid/ask to maintain queue priority without sacrificing edge
-            # Only penny 1 tick if spread is very wide (>3x required) and queue is deep
+            # ANTI-ADVERSE-SELECTION: quote BEHIND best bid/ask, not at it.
+            # Joining best level = getting picked off by informed flow.
+            # Stepping back = only fill when price already moved in our favor.
             bid_sz = price_data.get("bid_size", 0)
             ask_sz = price_data.get("ask_size", 0)
-            if spread_ticks <= required_ticks + 2:
-                # Spread is barely profitable: join best levels, don't sacrifice edge
+
+            if spread_ticks >= required_ticks * 4:
+                # Very wide spread: safe to join (plenty of edge even if adverse)
                 bid_step = 0
                 ask_step = 0
-            elif spread_ticks >= required_ticks * 3:
-                # Very wide spread: penny 1 tick ONLY if queue is deep (>10 units)
-                bid_step = 1 if bid_sz > 10 else 0
-                ask_step = 1 if ask_sz > 10 else 0
+            elif spread_ticks >= required_ticks * 2:
+                # Wide spread: step back 1 tick from best (protect against 1-tick sweeps)
+                bid_step = -1
+                ask_step = -1
             else:
-                # Normal spread: join best bid/ask, no pennying
-                bid_step = 0
-                ask_step = 0
+                # Tight/normal spread: step back 2 ticks (stronger adverse protection)
+                # Only get filled if price moves 2+ ticks past best level
+                bid_step = -2
+                ask_step = -2
+
             buy_price = round(best_bid + bid_step * tick, p_dec)
-            sell_price = round(best_ask - ask_step * tick, p_dec)
-            buy_reason = f"join+{bid_step}" if bid_step > 0 else "join bid"
-            sell_reason = f"join+{ask_step}" if ask_step > 0 else "join ask"
+            sell_price = round(best_ask - bid_step * tick, p_dec)  # negative step = wider
+            buy_reason = f"back{bid_step}" if bid_step < 0 else "join bid"
+            sell_reason = f"back{ask_step}" if ask_step < 0 else "join ask"
         elif pos_size != 0:
             # Spread too tight BUT we have inventory — allow exit side only
             # Step inside spread aggressively for the exit side
@@ -1904,6 +2079,19 @@ def run_cycle(info, exchange, address):
     print(f"  Vol: ${total_vol:.0f} | Turnover: {turnover:.1f}x ({turnover_hr:.1f}x/hr){edge_stats}")
     skip_detail = f"prof:{quotes_skipped_profitability} budg:{quotes_skipped_budget} risk:{quotes_skipped_risk} weak:{quotes_skipped_weak}"
     print(f"  Gate [{PROFITABILITY_MODE}]: {quotes_placed}/{quote_attempts} placed | Skips: {skip_detail} | InvMean: ${inv_mean:.1f} InvVar: {inv_var:.0f}")
+    # Delta summary
+    _net_delta = 0.0
+    for _c, _p in last_balances.get("positions", {}).items():
+        _sz = _p.get("size", 0)
+        _mid = 0
+        for _pair in PAIRS:
+            if _c in _pair and _pair in last_prices:
+                _mid = last_prices[_pair].get("mid", 0)
+                break
+        _net_delta += _sz * _mid
+    _delta_pct = abs(_net_delta) / pv * 100 if pv > 0 else 0
+    _delta_dir = "LONG" if _net_delta > 0 else "SHORT" if _net_delta < 0 else "FLAT"
+    print(f"  Delta: ${_net_delta:.2f} ({_delta_dir} {_delta_pct:.1f}%) | Hedge threshold: {HEDGE_DELTA_THRESHOLD_PCT}%")
     print(f"  RateLimit: {request_budget_remaining()}/{MAX_REQUESTS_PER_MIN} in window (lifetime:{request_count})")
     print(f"{'='*55}")
     write_status()
@@ -1914,12 +2102,17 @@ def _process_ws_fills(info, exchange, address):
     Replaces the REST check_fills() call in the main loop."""
     global total_trade_count, round_trips, strategy_pause_until
 
+    global _cached_orders_time
+
     with ws_fills_lock:
         pending = list(ws_fills_pending)
         ws_fills_pending.clear()
 
     if not pending:
         return
+
+    # Invalidate cached orders — fills mean order state changed
+    _cached_orders_time = 0
 
     # Filter out startup replay fills (fills older than when WS subscribed)
     if ws_subscribe_time > 0:
@@ -2061,6 +2254,15 @@ def _process_ws_fills(info, exchange, address):
             print(f"  >>> TRIP #{round_trips}: {trip['buy_px']:.2f}->{trip['sell_px']:.2f} | Gross: ${gross:.4f} | Fees: ${total_fee:.4f} | Net: {net_sign}${net:.4f} | {duration:.0f}s")
             tg_send(f"{'✅' if net >= 0 else '❌'} <b>Trip #{round_trips}</b> {coin}\nBuy ${trip['buy_px']:.2f} -> Sell ${trip['sell_px']:.2f}\nGross: ${gross:.4f} | Fees: ${total_fee:.4f}\n<b>Net: {net_sign}${net:.4f}</b> | {duration:.0f}s")
 
+            # Reset strategy pause escalation after 5 consecutive profitable trips
+            if len(completed_trips) >= 5:
+                last_5 = completed_trips[-5:]
+                if all(t["net"] >= 0 for t in last_5):
+                    old_count = getattr(sys.modules[__name__], '_strategy_pause_count', 0)
+                    if old_count > 0:
+                        sys.modules[__name__]._strategy_pause_count = 0
+                        print(f"  >>> STRATEGY PAUSE RESET: 5 consecutive winners, clearing {old_count} strikes")
+
             remaining = size - trip_size
             if remaining > 0.001:
                 trip_tracker[coin] = {"side": side, "price": price, "size": remaining, "fee": fee * remaining / size, "time": time.time()}
@@ -2093,6 +2295,57 @@ def _process_ws_fills(info, exchange, address):
                 break
 
 
+def close_orphan_positions(info, exchange, address):
+    """Detect and close positions on coins NOT in PAIRS config.
+    Runs on startup and periodically. Uses limit orders (maker) to avoid taker fees."""
+    managed_coins = set(COIN_MAP.values())
+    state = _api_call(info.user_state, address)
+    if not state:
+        return 0
+
+    closed = 0
+    for pos_entry in state.get("assetPositions", []):
+        p = pos_entry.get("position", {})
+        coin = p.get("coin", "")
+        size = float(p.get("szi", 0))
+        if size == 0 or coin in managed_coins:
+            continue
+
+        # Orphan position found — close it
+        entry_px = float(p.get("entryPx", 0))
+        upnl = float(p.get("unrealizedPnl", 0))
+        print(f"  ORPHAN: {coin} size={size} entry=${entry_px} uPnL=${upnl:.4f} — closing")
+        tg_send(f"🧹 <b>ORPHAN CLOSE</b>: {coin}\nSize: {size} | Entry: ${entry_px} | uPnL: ${upnl:.4f}")
+
+        # Cancel any resting orders on this coin first
+        try:
+            open_ords = _api_call(info.open_orders, address) or []
+            for o in open_ords:
+                if o.get("coin") == coin:
+                    try:
+                        cancel_order(exchange, coin, o["oid"])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Close via market_close (uses IOC, fastest exit)
+        try:
+            result = _api_call(exchange.market_close, coin)
+            if result:
+                print(f"  ORPHAN CLOSED: {coin}")
+                closed += 1
+            else:
+                print(f"  ORPHAN CLOSE FAILED: {coin} (429 or error), will retry next check")
+        except Exception as e:
+            print(f"  ORPHAN CLOSE ERROR: {coin}: {e}")
+
+    if closed:
+        print(f"  Closed {closed} orphan position(s)")
+        tg_send(f"🧹 Closed {closed} orphan position(s)")
+    return closed
+
+
 def main():
     print("=" * 55)
     print("  Hyperliquid Market Maker (Event-Driven)")
@@ -2105,8 +2358,14 @@ def main():
 
     info, exchange, address = setup_exchange()
 
-    # Start Telegram remote command listener
+    # Expose info/exchange at module level for Telegram commands
     import sys
+    sys.modules[__name__].info = info
+    sys.modules[__name__].exchange = exchange
+
+    # Close orphan positions before anything else
+    print("  Checking for orphan positions...")
+    close_orphan_positions(info, exchange, address)
     tg_cmd = TelegramCommander(TG_TOKEN, TG_CHAT_ID, sys.modules[__name__])
     tg_cmd.start()
 
@@ -2116,8 +2375,10 @@ def main():
     cycle_count = 0
     last_status_tg = time.time()
     last_account_refresh = 0
+    last_orphan_check = time.time()  # periodic orphan sweep
     last_orders_reconcile = 0  # periodic REST open_orders reconciliation
     ORDERS_RECONCILE_SECS = 60  # only fetch open_orders from REST every 60s
+    ORPHAN_CHECK_SECS = 300  # check for orphan positions every 5 minutes
     FILL_DEBOUNCE_SECS = 2.0  # batch fills for 2s before reacting
     last_fill_cycle = 0  # timestamp of last fill-triggered cycle
 
@@ -2143,6 +2404,11 @@ def main():
             if now - last_account_refresh > 30:
                 get_account_state(info, address)
                 last_account_refresh = now
+
+            # Periodic orphan position cleanup (every 5 min)
+            if now - last_orphan_check > ORPHAN_CHECK_SECS:
+                close_orphan_positions(info, exchange, address)
+                last_orphan_check = now
 
             run_cycle(info, exchange, address)
             cycle_count += 1
