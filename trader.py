@@ -1393,6 +1393,7 @@ def run_cycle(info, exchange, address):
 
         # Small position exit: if position is under $10, market_close it directly
         # (can't place limit orders under HL's $10 minimum)
+        coin_orders = current_orders.get(coin, [])
         pos_size_check = pos.get("size", 0)
         if pos_size_check != 0 and abs(pos_size_check) * mid < 10.0:
             print(f"  {coin} | SMALL POS EXIT: ${abs(pos_size_check) * mid:.2f} < $10 min, market closing")
@@ -1553,7 +1554,7 @@ def run_cycle(info, exchange, address):
                             close_px = round(book["best_bid"] - tick, PRICE_DECIMALS.get(coin, 2))
                             _api_call(exchange.order, coin, False, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         else:
-                            close_px = round(book["ask"] + tick, PRICE_DECIMALS.get(coin, 2))
+                            close_px = round(book["best_ask"] + tick, PRICE_DECIMALS.get(coin, 2))
                             _api_call(exchange.order, coin, True, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         print(f"  {coin} limit close @ {close_px}")
                     else:
@@ -1577,10 +1578,10 @@ def run_cycle(info, exchange, address):
                         close_sz = abs(pos_size)
                         tick = TICK_SIZE.get(coin, 0.01)
                         if pos_size > 0:
-                            close_px = round(book["bid"] - tick, PRICE_DECIMALS.get(coin, 2))
+                            close_px = round(book["best_bid"] - tick, PRICE_DECIMALS.get(coin, 2))
                             _api_call(exchange.order, coin, False, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         else:
-                            close_px = round(book["ask"] + tick, PRICE_DECIMALS.get(coin, 2))
+                            close_px = round(book["best_ask"] + tick, PRICE_DECIMALS.get(coin, 2))
                             _api_call(exchange.order, coin, True, close_sz, close_px, {"limit": {"tif": "Gtc"}}, reduce_only=True)
                         print(f"  {coin} limit close @ {close_px}")
                     else:
@@ -2150,6 +2151,8 @@ def _process_ws_fills(info, exchange, address):
         edge_bps = edge / fill_mid * 10000 if fill_mid > 0 else 0
 
         fill_edges.append(edge_bps)
+        if len(fill_edges) > 2000:
+            fill_edges[:] = fill_edges[-1000:]
         post_fill_checks.append({"coin": coin, "side": side, "price": price, "check_at": time.time() + 3.0})
 
         # Adverse selection detector (per-coin)
@@ -2244,10 +2247,14 @@ def _process_ws_fills(info, exchange, address):
                 "net": round(net, 6), "duration": round(duration, 1),
             }
             completed_trips.append(trip)
+            if len(completed_trips) > 2000:
+                completed_trips[:] = completed_trips[-1000:]
             event_log.log_trip(trip_num=round_trips, coin=coin, net_pnl=net)
             if coin not in coin_trips:
                 coin_trips[coin] = []
             coin_trips[coin].append(trip)
+            if len(coin_trips[coin]) > 500:
+                coin_trips[coin] = coin_trips[coin][-250:]
             round_trips += 1
 
             net_sign = "+" if net >= 0 else ""
@@ -2283,6 +2290,8 @@ def _process_ws_fills(info, exchange, address):
             "closed_pnl": closed_pnl,
         }
         all_fills.append(fill)
+        if len(all_fills) > 2000:
+            all_fills[:] = all_fills[-1000:]
         total_trade_count += 1
         event_log.log_fill(coin=coin, side=side.lower(), size=size, price=price, fee=fee, closed_pnl=closed_pnl)
         event_log.log_custom("fill_context", coin=coin, edge_bps=round(edge_bps, 2), mid=round(fill_mid, 6), build_id=BUILD_ID)
@@ -2439,7 +2448,8 @@ def main():
 
     tg_cmd.stop()
     cancel_all_orders(exchange, info, address)
-    check_fills(info, exchange, address)
+    # Process any remaining WS fills (don't use REST check_fills to avoid double-counting)
+    _process_ws_fills(info, exchange, address)
     write_status()
     pv = portfolio_value()
     print(f"\nFinal Portfolio: ${pv:.2f} | Fills: {total_trade_count}")
