@@ -7,10 +7,11 @@
 
 | Field | Value |
 |---|---|
-| **Active branch** | `venusaur` |
+| **Active branch** | `feat/funding-scanner` |
 | **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
-| **Bot status** | RUNNING (all 3 pairs quoting post-fix) |
-| **Profitable?** | No — net -$0.21 over 9 days / 20 fills, fee ratio 390×. Structural fixes in progress. |
+| **MM leg (trader.py)** | STOPPED (was bleeding $0.75/hr — spreads collapsed below gate) |
+| **Funding scanner leg** | LIVE (screen `fscan`) — $30 notional cap, maker-only |
+| **Profitable?** | MM: no. Scanner: TBD — running since 2026-04-17 21:23 UTC. |
 | **Slywatch** | ACTIVE — auto-commit + auto-push to GitHub |
 | **Last updated** | 2026-04-17 |
 

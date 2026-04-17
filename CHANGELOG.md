@@ -1,5 +1,33 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-17 — Funding-rate scanner leg (feat/funding-scanner)
+
+### Added
+- `autoresearch/live_funding_scan.py` — scans every HL perp each poll (60s),
+  ranks by |funding - 1.25e-5 baseline|, filters by $5M min OI, opens up to
+  2 maker-only positions on the highest funding extremes. Exits when
+  funding normalizes, flips sign vs our side, or adverse price move >=5%.
+  RiskManager 3% daily-loss kill, $30 total-notional cap.
+- First live deployment found: LONG WLD @ -75% APY (`$19M OI`), SHORT STBL @
+  +62% APY (`$5.2M OI`). Posted @ mid ±0.1% as post-only ALO.
+
+### Changed
+- Stopped MM leg (`trader.py`) — market spreads on ARK/APE/PENDLE collapsed
+  to 3-4bps vs 7bps required gate; bot was correctly idle but not earning.
+  MM capital now reallocated to scanner leg. Will resume MM when a regime
+  returns where it's backtest-positive.
+
+### Why
+- 9 days of MM data showed -$0.21 net, avg edge -1.3bps, trip-fee-ratio
+  390x. Even after today's weak-gate fix, live MM lost $0.75 in 1 hour as
+  soon as it resumed trading. MM strategy has no edge at this account size
+  on these pairs. The `offprem` backtest dashboard
+  (https://assiamahs.github.io/offprem/) shows `hip3-funding-harvest-test`
+  with Sharpe 21 — the highest in 25+ strategies tested. Funding-harvest
+  is the validated lane. Generalized it from a single hardcoded `xyz:SILVER`
+  to a live scanner so it actually has trades to make instead of polling
+  a quiet market for days.
+
 ## 2026-04-17 — Weak-pair deadlock fix + stall watchdog
 
 ### Fixes
