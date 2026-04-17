@@ -351,10 +351,16 @@ LEVEL_SPACING_TICKS = 2  # ticks between levels (only used if QUOTE_LEVELS > 1)
 WEAK_PAIR_LOOKBACK = 5  # trigger faster: only need 5 trips to evaluate
 WEAK_PAIR_BASE_SUSPEND = 900  # 15 min first offense
 WEAK_PAIR_MAX_SUSPEND = 7200  # 2 hour max suspension
+WEAK_PAIR_MAX_STRIKES = 5  # beyond this, pair is disabled (needs manual re-enable)
+WEAK_PAIR_STALL_ALERT_SECS = 900  # tg alert if all pairs suspended this long
 weak_pair_suspended = {}  # coin -> resume_timestamp
 weak_pair_strikes = {}  # coin -> number of times suspended (escalation counter)
+weak_pair_disabled = set()  # coins hard-disabled after MAX_STRIKES — manual re-enable
+weak_pair_trip_mark = {}  # coin -> trip-count snapshot at last resume (for fresh-slate eval)
 # Per-coin trip history for weak pair detection
 coin_trips = {}  # coin -> list of completed trip dicts
+_last_stall_alert = 0.0  # unix ts of last "all pairs suspended" tg alert
+_all_suspended_since = None  # unix ts when all pairs first went suspended (None = not all suspended)
 
 # Queue quality thresholds
 CROWDED_SIZE = 30  # units at top level = crowded queue
@@ -1102,8 +1108,16 @@ MIN_SCORE_THRESHOLD = -12.0  # allow exit-only pairs with moderate negative scor
 def check_weak_pair(coin):
     """Check if a coin should be suspended based on recent trip performance.
     Escalating: each re-suspension doubles the timeout (15m -> 30m -> 1h -> 2h cap).
+    After resume, requires WEAK_PAIR_LOOKBACK *new* trips before re-evaluating —
+    fixes the strike-escalation deadlock where the same stale losing trips
+    suspended the pair forever.
     Returns (is_suspended, reason_string)."""
     now = time.time()
+
+    # Hard-disabled: stays out until operator re-enables
+    if coin in weak_pair_disabled:
+        strikes = weak_pair_strikes.get(coin, WEAK_PAIR_MAX_STRIKES)
+        return True, f"DISABLED (strike {strikes} >= {WEAK_PAIR_MAX_STRIKES}) — manual re-enable required"
 
     # Check if currently suspended
     if coin in weak_pair_suspended:
@@ -1113,12 +1127,18 @@ def check_weak_pair(coin):
             strikes = weak_pair_strikes.get(coin, 1)
             return True, f"suspended {remaining}s (weak, strike {strikes})"
         else:
+            # Resume: snapshot current trip count so we only judge NEW trips
             del weak_pair_suspended[coin]
+            weak_pair_trip_mark[coin] = len(coin_trips.get(coin, []))
+            tg_send(f"▶️ <b>RESUMED</b> {coin} (strike {weak_pair_strikes.get(coin, 0)}) — evaluating next {WEAK_PAIR_LOOKBACK} trips")
 
-    # Check recent trip history
     trips = coin_trips.get(coin, [])
-    if len(trips) >= WEAK_PAIR_LOOKBACK:
-        recent = trips[-WEAK_PAIR_LOOKBACK:]
+    mark = weak_pair_trip_mark.get(coin, 0)
+    new_trips = trips[mark:]
+
+    # Need at least LOOKBACK *new* trips (since resume / startup) to judge
+    if len(new_trips) >= WEAK_PAIR_LOOKBACK:
+        recent = new_trips[-WEAK_PAIR_LOOKBACK:]
         net_sum = sum(t["net"] for t in recent)
         winners = sum(1 for t in recent if t["net"] >= 0)
         avg_fees = sum(t.get("fees", 0) for t in recent) / len(recent)
@@ -1126,20 +1146,24 @@ def check_weak_pair(coin):
         fee_ratio = avg_fees / avg_gross if avg_gross > 0 else 999
 
         if net_sum < 0 and winners < WEAK_PAIR_LOOKBACK * 0.4:
-            # Escalating suspension: doubles each time
             strikes = weak_pair_strikes.get(coin, 0) + 1
             weak_pair_strikes[coin] = strikes
+
+            # Hard cap: after MAX_STRIKES, disable and require manual re-enable
+            if strikes >= WEAK_PAIR_MAX_STRIKES:
+                weak_pair_disabled.add(coin)
+                tg_send(f"🚫 <b>PAIR DISABLED</b> {coin}: strike {strikes} (max {WEAK_PAIR_MAX_STRIKES})\nLast {WEAK_PAIR_LOOKBACK} trips: ${net_sum:.4f} WR:{winners}/{WEAK_PAIR_LOOKBACK}\nConsider rotating to a different symbol. Send /reenable {coin} to retry.")
+                return True, f"DISABLED: strike {strikes} >= max {WEAK_PAIR_MAX_STRIKES}"
+
             suspend_secs = min(WEAK_PAIR_BASE_SUSPEND * (2 ** (strikes - 1)), WEAK_PAIR_MAX_SUSPEND)
             weak_pair_suspended[coin] = now + suspend_secs
             tg_send(f"⏸️ <b>WEAK PAIR</b> {coin}: strike {strikes}\nLast {WEAK_PAIR_LOOKBACK} trips: ${net_sum:.4f} WR:{winners}/{WEAK_PAIR_LOOKBACK}\nSuspended {suspend_secs//60}min")
             return True, f"SUSPENDED: strike {strikes} ({suspend_secs//60}min) | last {WEAK_PAIR_LOOKBACK} trips net ${net_sum:.4f}, WR {winners}/{WEAK_PAIR_LOOKBACK} FeeR:{fee_ratio:.2f}"
 
-    # If a coin comes back from suspension and wins, reduce strikes
-    if coin in weak_pair_strikes and len(trips) >= WEAK_PAIR_LOOKBACK:
-        recent = trips[-WEAK_PAIR_LOOKBACK:]
-        winners = sum(1 for t in recent if t["net"] >= 0)
-        if winners >= WEAK_PAIR_LOOKBACK * 0.6:  # 60%+ win rate = redemption
+        # Redemption: 60%+ wins since resume — decay one strike, rearm the mark
+        if winners >= WEAK_PAIR_LOOKBACK * 0.6 and coin in weak_pair_strikes:
             weak_pair_strikes[coin] = max(0, weak_pair_strikes[coin] - 1)
+            weak_pair_trip_mark[coin] = len(trips)  # fresh window for next eval
 
     return False, ""
 
@@ -2421,6 +2445,26 @@ def main():
 
             run_cycle(info, exchange, address)
             cycle_count += 1
+
+            # Stall watchdog: alert when EVERY configured pair is sidelined
+            # (suspended or disabled) — silent paralysis is the #1 failure mode.
+            global _all_suspended_since, _last_stall_alert
+            try:
+                active_coins = [COIN_MAP.get(p, p.replace("-PERP", "")) for p in PAIRS]
+                sidelined = [c for c in active_coins
+                             if c in weak_pair_disabled
+                             or (c in weak_pair_suspended and now < weak_pair_suspended[c])]
+                if active_coins and len(sidelined) == len(active_coins):
+                    if _all_suspended_since is None:
+                        _all_suspended_since = now
+                    stall_secs = now - _all_suspended_since
+                    if stall_secs >= WEAK_PAIR_STALL_ALERT_SECS and now - _last_stall_alert > 1800:
+                        tg_send(f"🛑 <b>ALL PAIRS SIDELINED</b> for {int(stall_secs/60)}min\nPairs: {', '.join(sidelined)}\nBot is not quoting. Review pair selection or /reenable.")
+                        _last_stall_alert = now
+                else:
+                    _all_suspended_since = None
+            except Exception:
+                pass
 
             # Telegram status every ~2 min
             if now - last_status_tg > 120:

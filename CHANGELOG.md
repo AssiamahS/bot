@@ -1,5 +1,45 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-17 — Weak-pair deadlock fix + stall watchdog
+
+### Fixes
+- **Weak-pair strike deadlock (trader.py):** on resume, suspension was re-firing
+  immediately on the same stale losing trips, escalating strikes unboundedly
+  (observed: strike 115 on ARK/APE/PENDLE, bot paralyzed for ~60min with zero
+  fills and no alert). Fix: snapshot trip-count on resume via
+  `weak_pair_trip_mark[coin]` and only re-evaluate once `WEAK_PAIR_LOOKBACK`
+  *new* trips accumulate.
+- **Strike hard cap:** strikes past `WEAK_PAIR_MAX_STRIKES` (5) move the coin
+  into `weak_pair_disabled` and require manual re-enable via TG. Prevents
+  runaway escalation even if the fresh-slate logic misses an edge case.
+- **All-pairs-sidelined watchdog:** main loop now detects when every
+  configured pair is either suspended or disabled and fires a TG alert after
+  `WEAK_PAIR_STALL_ALERT_SECS` (15min), rate-limited to once per 30min.
+  Silent paralysis was the #1 failure mode.
+- **Order size bumped $10 → $25** (config.json): fee ratio was 390× gross PnL
+  at $10 clips. At $25, per-fill maker fee (~0.5bps of $25 = $0.00125) is a
+  smaller fraction of the 5bps+ target edge.
+
+### Why
+- Log evidence: `ARK | suspended 4597s (weak, strike 115)` etc. across all 3
+  pairs simultaneously. `quotes_skipped_weak: 79504` over 9 days, 20 fills
+  total. The bot was architecturally unable to recover from a losing streak
+  without a manual restart. Restart-only recovery is not acceptable.
+
+## 2026-04-04 — Orphan Inventory Auto-Flatten
+
+### Fixes
+- Added explicit orphan position management in `trader.py`: coins with open positions that are not in `PAIRS` are now detected every cycle.
+- Added orphan cleanup modes via config:
+	- `orphan_position_mode`: `close` (default), `alert`, or `ignore`
+	- `orphan_close_retry_secs`: retry throttle for repeated close attempts
+	- `orphan_exempt_coins`: allowlist for intentionally held manual positions
+- Cleanup now runs before normal quoting logic, so stale inventory is handled even during remote pause or risk cooldown.
+- Orphan cleanup cancels any resting orders on the orphan coin and then sends `market_close` when mode is `close`.
+
+### Why
+- Root cause of zombie inventory: run cycle only quoted/manages symbols in `PAIRS`, so positions from old configs were never unwound.
+
 ## 2026-03-16 — Slywatch + Profitability Overhaul
 
 ### Infrastructure

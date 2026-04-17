@@ -7,21 +7,23 @@
 
 | Field | Value |
 |---|---|
-| **Active branch** | `slywatch-snapshots` (off `restore_features`) |
+| **Active branch** | `venusaur` |
 | **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
-| **Bot status** | RUNNING |
-| **Profitable?** | Under evaluation |
+| **Bot status** | RUNNING (all 3 pairs quoting post-fix) |
+| **Profitable?** | No — net -$0.21 over 9 days / 20 fills, fee ratio 390×. Structural fixes in progress. |
 | **Slywatch** | ACTIVE — auto-commit + auto-push to GitHub |
-| **Last updated** | 2026-04-04 |
+| **Last updated** | 2026-04-17 |
 
 ## Current Strategy
 
-- **Pairs**: HYPE-PERP
-- **Order size**: $10.50 USD
-- **Min spread**: 20 BPS
+- **Pairs**: ARK-PERP, APE-PERP, PENDLE-PERP
+- **Order size**: $25 USD (bumped from $10 — fee ratio was 390×)
+- **Min spread**: 15 BPS
 - **Profitability mode**: strict
-- **Safety BPS**: 9.0
-- **Refresh interval**: 2s
+- **Safety BPS**: 4.0
+- **Refresh interval**: 5s (adaptive)
+- **Max strikes**: 5 (past this → pair disabled pending manual /reenable)
+- **Stall alert**: TG fires when all pairs sidelined >15min
 
 ## Known Issues (Open)
 
@@ -32,6 +34,17 @@
 5. **Net vs gross inventory** — signed `sz` used instead of `abs(sz)` (trader.py:725)
 6. **Double API call per cycle** — `get_account_state` called twice (trader.py:902 + 1416)
 7. **Misleading field name** — `withdrawable` stores `totalNtlPos` (trader.py:469)
+
+## Latest Session (2026-04-17)
+
+- Found bot paralyzed: all 3 pairs at strike 115, suspended, zero fills for ~60min, no alert.
+- Root cause: `check_weak_pair` re-evaluated the same stale losing trips on every resume, escalating strikes unboundedly. Suspension timer capped at 2h but strike counter was uncapped.
+- Fix in `trader.py`:
+	- `weak_pair_trip_mark[coin]` snapshots trip-count on resume; eval only runs after `WEAK_PAIR_LOOKBACK` *new* trips.
+	- `WEAK_PAIR_MAX_STRIKES = 5` — past this, coin moves into `weak_pair_disabled`, needs manual /reenable.
+	- Main-loop watchdog: TG alert when all configured pairs are sidelined > `WEAK_PAIR_STALL_ALERT_SECS` (15min).
+- Config: `order_size_usd` 10 → 25 (fee ratio was 390× gross PnL).
+- Bot restarted; live log shows all 3 pairs scoring and PENDLE buy placed immediately.
 
 ## Latest Session (2026-04-04)
 
