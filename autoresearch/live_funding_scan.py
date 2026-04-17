@@ -51,6 +51,29 @@ def fetch_meta_and_ctxs():
     return post({"type": "metaAndAssetCtxs"})
 
 
+def fetch_funding_percentile(coin, current_fr, hours=168):
+    """Return percentile (0-100) of current_fr within last N hours of this coin's
+    own funding history. Used to gate: a coin whose baseline is already extreme
+    shouldn't trigger on its normal level."""
+    try:
+        end = int(time.time() * 1000)
+        start = end - hours * 3_600_000
+        rows = post({"type": "fundingHistory", "coin": coin,
+                     "startTime": start, "endTime": end})
+        rates = sorted(float(r["fundingRate"]) for r in rows)
+        if len(rates) < 8:
+            return None  # too little history to judge
+        if current_fr >= 0:
+            # short-funding-collect: want current to be HIGH percentile
+            rank = sum(1 for r in rates if r <= current_fr)
+        else:
+            # long-funding-collect: want current to be LOW percentile
+            rank = sum(1 for r in rates if r >= current_fr)
+        return 100.0 * (1 - rank / len(rates)) if current_fr < 0 else 100.0 * rank / len(rates)
+    except Exception:
+        return None
+
+
 def fetch_unified_equity(addr):
     perp = post({"type": "clearinghouseState", "user": addr})
     perp_eq = float(perp["marginSummary"]["accountValue"])
@@ -121,9 +144,20 @@ def open_positions(meta):
     return out
 
 
-def place_order(exch, coin, is_buy, size, mark, sz_decimals, maker):
+def fetch_open_orders(addr):
+    """Returns set of coins with any resting order (used to prevent duplicate
+    entries while a prior maker order is still working)."""
+    orders = post({"type": "openOrders", "user": addr})
+    coins = set()
+    for o in orders or []:
+        coins.add(o.get("coin"))
+    return coins
+
+
+def place_order(exch, coin, is_buy, size, mark, sz_decimals, maker, maker_bps=3.0):
     if maker:
-        px = round_price(mark * (1 - 0.001 * (1 if is_buy else -1)), sz_decimals)
+        offset = maker_bps / 10000.0
+        px = round_price(mark * (1 - offset * (1 if is_buy else -1)), sz_decimals)
         tif = "Alo"
     else:
         px = round_price(mark * (1 + 0.005 * (1 if is_buy else -1)), sz_decimals)
@@ -139,6 +173,10 @@ def main():
     p.add_argument("--min-oi-usd", type=float, default=5_000_000.0)
     p.add_argument("--stop-pct", type=float, default=5.0)
     p.add_argument("--poll-secs", type=int, default=60)
+    p.add_argument("--pctile-min", type=float, default=80.0,
+                   help="require current funding to be in top N pct of coin's own 7d history")
+    p.add_argument("--maker-bps", type=float, default=3.0,
+                   help="maker price offset from mid in bps (default 3bps = quick fills)")
     p.add_argument("--max-daily-loss-pct", type=float, default=3.0)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--maker", action="store_true", default=True)
@@ -187,6 +225,7 @@ def main():
             pnl_today = equity - starting_equity
 
             positions = open_positions(perp_state)
+            pending_coins = fetch_open_orders(addr)  # resting maker orders
             total_open_usd = sum(abs(s) * float(next(
                 (c["markPx"] for m, c in zip(meta["universe"], ctxs) if m["name"] == k), 0
             )) for k, s in positions.items())
@@ -224,7 +263,9 @@ def main():
                     sz_decimals = next(m["szDecimals"] for m in meta["universe"] if m["name"] == coin)
                     is_buy = szi < 0  # closing a short = buy back
                     try:
-                        resp, px, tif = place_order(exch, coin, is_buy, abs(szi), mark, sz_decimals, args.maker)
+                        resp, px, tif = place_order(exch, coin, is_buy, abs(szi), mark,
+                                                    sz_decimals, args.maker,
+                                                    maker_bps=args.maker_bps)
                         closed_this_tick.append({"coin": coin, "reason": reason, "px": px, "resp_type": str(resp)[:120]})
                         notify.send(f"↩️ *close* `{coin}` szi={szi:+.4f} @ ${px}\nreason: {reason}")
                         entry_px.pop(coin, None)
@@ -242,6 +283,12 @@ def main():
                     break
                 if c["coin"] in positions and positions[c["coin"]] != 0:
                     continue  # already in this coin
+                if c["coin"] in pending_coins:
+                    continue  # resting maker order still working — don't double up
+                # Per-coin percentile gate: current rate must be in top N pct of its own history
+                pct = fetch_funding_percentile(c["coin"], c["funding"])
+                if pct is not None and pct < args.pctile_min:
+                    continue
                 ok, rm_reason = rm.allow_order(c["coin"], args.usd_per_pos, equity, pnl_today)
                 if not ok:
                     continue
@@ -251,13 +298,15 @@ def main():
                 if size <= 0:
                     continue
                 if args.dry_run:
-                    opened_this_tick.append({"coin": c["coin"], "dir": c["direction"], "apy": c["apy_pct"], "dry": True})
+                    opened_this_tick.append({"coin": c["coin"], "dir": c["direction"],
+                                             "apy": c["apy_pct"], "pct": pct, "dry": True})
                     room -= 1
                     budget_left_usd -= args.usd_per_pos
                     continue
                 try:
                     resp, px, tif = place_order(exch, c["coin"], is_buy, size, c["mark"],
-                                                c["sz_decimals"], args.maker)
+                                                c["sz_decimals"], args.maker,
+                                                maker_bps=args.maker_bps)
                     opened_this_tick.append({"coin": c["coin"], "dir": c["direction"],
                                              "apy": c["apy_pct"], "px": px, "size": size})
                     entry_px[c["coin"]] = c["mark"]
