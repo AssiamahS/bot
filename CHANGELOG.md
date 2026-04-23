@@ -1,5 +1,41 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.21.0 — HL crypto HODL basket (BTC/ETH/SOL/HYPE at 1x)
+
+### Added
+- `scripts/crypto_hodl.py` — equal-weight long basket on HL perps at 1x
+  leverage. Puts directional crypto exposure on the same wallet that was
+  sitting idle during every BTC up-move. Default $10 × 4 coins = $40 of
+  ~$61 total account, keeps ~$21 dry.
+- Self-healing built in:
+  - Refuses to run if the MM bot's heartbeat is fresh (MM and HODL on
+    the same wallet would fight each other).
+  - Auto-adds every coin in the basket to `orphan_exempt_coins` in
+    `config.json` so that if the MM bot is later restarted, it won't
+    auto-flatten these as orphans (the 2026-04-04 orphan-cleanup code
+    would otherwise eat them).
+  - Detects that USDC lives on HL spot, not perps, and auto-transfers
+    the margin needed via `exchange.usd_class_transfer(to_perp=True)`.
+  - Limit orders at mid + 50 bps slippage cap (not market orders).
+  - 25% per-coin cap, 75% total-deploy cap, hard refusal if either
+    would be breached.
+
+### Verified (dry run against live wallet)
+```
+perps equity:  $1.37   (existing WLD long)
+spot USDC:     $60.04
+total:         $61.41
+
+plan: transfer $40.63 spot→perps, then:
+  BTC   0.000128  @ $78,119  limit<$78,510
+  ETH   0.004255  @ $2,350   limit<$2,362
+  SOL   0.116176  @ $86.08   limit<$86.51
+  HYPE  0.243555  @ $41.06   limit<$41.26
+```
+
+Dry-run only in this commit. --live path requires explicit user go-ahead
+because unlike Alpaca paper, this is real money.
+
 ## 2026-04-23 — v2.20.0 — Exit automation + self-healing watchdog
 
 ### Added
