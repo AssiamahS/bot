@@ -137,13 +137,41 @@ def main() -> int:
     print("=" * 64)
 
     try:
-        key = getpass.getpass("main private key (0x...): ").strip()
+        raw = getpass.getpass("main private key (0x...): ")
     except KeyboardInterrupt:
         print("\naborted")
         return 1
 
-    if not key.startswith("0x") or len(key) < 64:
-        print("that doesn't look like a private key (expected 0x… 64 hex chars)")
+    # Normalize: strip whitespace/newlines, handle with or without 0x prefix.
+    key = raw.strip().replace(" ", "").replace("\n", "").replace("\r", "")
+    if not key:
+        print("empty input — nothing was pasted. Try again.")
+        print("Tip: on macOS, Cmd-V in terminal pastes even when input is hidden.")
+        return 1
+
+    # Common mistakes to detect explicitly
+    if key.lower().startswith("0x") and len(key) == 42:
+        print("You pasted a wallet ADDRESS (42 chars), not a PRIVATE KEY.")
+        print("A private key is 64 hex characters (or 66 with 0x prefix).")
+        print("In MetaMask: Account details → SHOW PRIVATE KEY (not the address).")
+        return 1
+
+    # Normalize to 0x-prefixed form
+    if not key.lower().startswith("0x"):
+        key = "0x" + key
+
+    if len(key) != 66:
+        print(f"That's {len(key)} characters after stripping whitespace. Expected 66 (0x + 64 hex).")
+        print("If you copied from MetaMask, paste ONLY the hex string shown after")
+        print("you click 'Hold to reveal private key'. No spaces, no quotes.")
+        return 1
+
+    # Check hex validity
+    try:
+        int(key, 16)
+    except ValueError:
+        print("Contains non-hex characters. Did the paste include a trailing word or URL?")
+        print("Re-copy from the wallet and try again.")
         return 1
 
     try:
@@ -153,8 +181,19 @@ def main() -> int:
         return 1
 
     if derived.lower() != expected.lower():
-        print(f"derived address {derived} != config wallet_address {expected}")
-        print("That's the WRONG key. Agent key? Different wallet? Aborting.")
+        print(f"derived address:        {derived}")
+        print(f"config wallet_address:  {expected}")
+        print()
+        # Check if they might have pasted the agent key
+        cfg = json.loads(CONFIG_PATH.read_text())
+        agent_priv = cfg.get("wallet_private_key", "")
+        if agent_priv and key.lower() == agent_priv.lower():
+            print("That's the AGENT KEY from config.json, not the main wallet key.")
+            print("The main wallet key is the one in MetaMask/Rabby that holds the USDC.")
+        else:
+            print("That's a valid key but for a different address than the one in config.json.")
+            print("Either config.json's wallet_address is wrong, or you exported the wrong")
+            print("account from your wallet. Check which account shows the $60 USDC balance.")
         return 1
 
     keychain_set(expected, key)
