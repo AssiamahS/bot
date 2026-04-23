@@ -154,13 +154,21 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=MAX_POSITIONS)
     ap.add_argument("--min-oi-usd", type=float, default=50_000.0)
     ap.add_argument("--risk-per-trade", type=float, default=RISK_PER_TRADE)
+    ap.add_argument("--no-transfer", action="store_true",
+                    help="use only perps margin already present; don't try spot->perps transfer")
+    ap.add_argument("--leverage", type=int, default=1,
+                    help="leverage for perp orders (1=HODL-like, higher=more notional per $ margin)")
     args = ap.parse_args()
 
     cfg = json.loads(CONFIG_PATH.read_text())
     priv = cfg["wallet_private_key"]
     wallet = cfg.get("wallet_address") or Account.from_key(priv).address
     info = Info(constants.MAINNET_API_URL, skip_ws=True)
+    # Default Exchange uses main HL perp meta. HIP-3 markets (xyz:*) need
+    # their own meta because coin->asset index lookups fail otherwise.
     exchange = Exchange(Account.from_key(priv), constants.MAINNET_API_URL)
+    hip3_meta = api({"type": "meta", "dex": "xyz"})
+    hip3_exchange = Exchange(Account.from_key(priv), constants.MAINNET_API_URL, meta=hip3_meta)
 
     state = info.user_state(wallet)
     equity = float(state["marginSummary"]["accountValue"])
@@ -179,11 +187,20 @@ def main() -> int:
     cands = rank_candidates(uni, args.min_oi_usd)
     print(f"[scan] {len(cands)} pass entry+percentile filter\n")
 
-    per_trade_risk = total_cap * args.risk_per_trade
-    per_trade_notional = per_trade_risk / STOP_PCT  # fixed_fractional: risk / stop
-    budget_total = total_cap * MAX_TOTAL_DEPLOY_FRAC
-    print(f"sizing: ${per_trade_notional:.2f}/position (risk ${per_trade_risk:.2f} at {STOP_PCT*100:.0f}% stop)")
-    print(f"budget: ${budget_total:.2f} total ({MAX_TOTAL_DEPLOY_FRAC*100:.0f}% of capital)")
+    if args.no_transfer:
+        # Size from PERPS MARGIN ONLY × leverage. No transfer needed.
+        usable_margin = max(0.0, equity - 0.30)  # keep $0.30 buffer for maintenance
+        per_trade_notional = usable_margin * args.leverage * 0.95 / max(1, args.top)
+        budget_total = usable_margin * args.leverage * 0.95
+        print(f"sizing [no-transfer]: ${per_trade_notional:.2f}/position "
+              f"(margin ${usable_margin:.2f} × {args.leverage}x leverage)")
+        print(f"budget: ${budget_total:.2f} total from perps margin only")
+    else:
+        per_trade_risk = total_cap * args.risk_per_trade
+        per_trade_notional = per_trade_risk / STOP_PCT  # fixed_fractional: risk / stop
+        budget_total = total_cap * MAX_TOTAL_DEPLOY_FRAC
+        print(f"sizing: ${per_trade_notional:.2f}/position (risk ${per_trade_risk:.2f} at {STOP_PCT*100:.0f}% stop)")
+        print(f"budget: ${budget_total:.2f} total ({MAX_TOTAL_DEPLOY_FRAC*100:.0f}% of capital)")
 
     print(f"\ncandidates (top {args.top}):")
     print(f"  {'NAME':<18} {'SIDE':<6} {'FR(hr)':>10} {'PCT':>6} {'OI_USD':>12} {'MID':>10}")
@@ -214,19 +231,23 @@ def main() -> int:
         print(f"\nDRY RUN — pass --live to submit {len(actions)} orders (total ${total_notional:.2f})")
         return 0
 
-    # Ensure enough perps margin for the whole basket (with 10% buffer)
-    if not ensure_perp_margin(info, exchange, wallet, total_notional * 1.1, interactive=True):
-        print("margin shortfall — abort")
-        log({"event": "hip3_abort", "reason": "margin"})
-        return 1
+    # Ensure enough perps margin for the whole basket (with 10% buffer).
+    # Skipped entirely in --no-transfer mode (caller is opting to use existing margin).
+    if not args.no_transfer:
+        need = total_notional * 1.1 / max(1, args.leverage)  # margin needed at chosen leverage
+        if not ensure_perp_margin(info, exchange, wallet, need, interactive=True):
+            print("margin shortfall — abort")
+            log({"event": "hip3_abort", "reason": "margin"})
+            return 1
 
     print(f"\nLIVE — submitting {len(actions)} orders")
     for a in actions:
         coin = a["coin"]
         size = round(a["notional"] / a["mid"], a["szDecimals"])
-        # Set leverage to 1x (minimum directional risk)
+        # Set leverage per CLI flag. Use the HIP-3-meta-aware exchange for
+        # these markets since the default Exchange's coin-table is main-dex only.
         try:
-            exchange.update_leverage(1, coin, is_cross=True)
+            hip3_exchange.update_leverage(args.leverage, coin, is_cross=True)
         except Exception as e:
             print(f"  {coin} update_leverage: {e}")
         # Limit price: for short, set below mid; for long, above mid. Use
@@ -239,8 +260,8 @@ def main() -> int:
             is_buy = True
             limit_px = a["mid"] * (1 + slip_frac)
         try:
-            resp = exchange.order(coin, is_buy, size, limit_px,
-                                  {"limit": {"tif": "Gtc"}}, reduce_only=False)
+            resp = hip3_exchange.order(coin, is_buy, size, limit_px,
+                                       {"limit": {"tif": "Gtc"}}, reduce_only=False)
             statuses = resp.get("response", {}).get("data", {}).get("statuses", [])
             status_info = statuses[0] if statuses else {}
             oid = status_info.get("resting", {}).get("oid") or status_info.get("filled", {}).get("oid")

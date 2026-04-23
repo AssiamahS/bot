@@ -1,5 +1,34 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.25.0 — HIP-3 Exchange-meta fix + --no-transfer mode
+
+### Fixed
+- `scripts/hip3_funding.py` was crashing on every HIP-3 order with
+  `KeyError: 'xyz:COST'` because the default HL SDK Exchange object
+  only loads meta for the main perp dex. HIP-3 coin names live in a
+  separate universe. Now we spin up a second Exchange instance with
+  `dex="xyz"` meta and route all HIP-3 order/leverage calls through
+  it. Main-dex perps (BTC/ETH/SOL/...) still use the default instance.
+- Same applies to `update_leverage` on HIP-3 coins — same fix.
+
+### Added
+- `--no-transfer` flag on `hip3_funding.py` — skips margin_helper
+  entirely and sizes positions from whatever is already on perps.
+  For cases where the user can't/won't do a spot→perps transfer.
+- `--leverage N` flag — pass 5 or 10 to use higher leverage when
+  margin is limited. Default stays at 1x for HODL-like risk profile.
+
+### Discovered
+- First --live run with --no-transfer failed silently because WLD's
+  existing 10× position consumes 100% of the $1.37 perps margin
+  ($13.67 notional × 1/10 = $1.37 margin used). No free margin left
+  for any new HIP-3 position. The submit succeeded at the SDK level
+  but HL's clearinghouse rejected it without raising a clean
+  exception.
+- Practical consequence: WLD is a strategic blocker, not just a
+  minor losing trade. Either close WLD (realize –$1.30, free $0.07)
+  or do the spot→perps transfer. Both require user wallet action.
+
 ## 2026-04-23 — v2.24.0 — HIP-3 funding harvester live
 
 ### Added
