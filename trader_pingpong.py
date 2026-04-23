@@ -12,16 +12,21 @@ import os
 import sys
 import urllib.request
 import urllib.parse
-from typing import Optional
 
 from eth_account import Account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 
-# Telegram alerts
-TG_TOKEN = "8687483047:AAHTNtpdRdJbQub1Gaubnnz87BBdKbFkzNU"
-TG_CHAT_ID = "8727843043"
+# Telegram alerts — loaded from env/config, never hardcoded
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+try:
+    with open(CONFIG_FILE) as _f:
+        _cfg = json.load(_f)
+except Exception:
+    _cfg = {}
+TG_TOKEN = os.environ.get("TG_TOKEN") or _cfg.get("tg_token", "")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or _cfg.get("tg_chat_id", "")
 
 def tg_send(msg):
     try:

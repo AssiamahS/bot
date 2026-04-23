@@ -1,5 +1,54 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.14.0 — Force-close deadlock fix + TG token de-hardcode
+
+### Fixes
+- **Primary PnL leak — inventory cap vs order size mismatch (trader.py):**
+  `MAX_INVENTORY_USD = 3.5` combined with `order_size_usd = 25` meant every
+  fill was instantly 7.1× over cap → `overweight_ratio > 4.0` triggered
+  `OVERWEIGHT FORCE CLOSE` on every single round trip, taker-fee exits, guaranteed
+  loss. Changed to `max(30.0, ORDER_SIZE_USD * 1.2)` so the cap auto-scales with
+  configured order size. Same fix applied to `MAX_POSITION_NOTIONAL`.
+- **Per-coin equity fraction too tight (trader.py):** `account_value * 0.10` =
+  $6 at $61 equity, clamped effective cap below one full order. Raised to 0.50
+  and flipped min→max: `effective_inv_cap = max(MAX_INVENTORY_USD, max_inv_equity)`.
+- **Max-hold timer cut winning trips short (trader.py):** the completed_trips
+  dataset shows winners held 7–24 min while losers held <5 min. The 300s force-close
+  was evicting profitable inventory. Raised to 900s.
+- **Exit-urgency trigger too early (trader.py):** `hold_secs > 60` pushed the max
+  14bps exit skew within 1 min, bleeding edge on healthy trades. Raised to 300s.
+- **Misleading `withdrawable` field (trader.py:703):** status JSON stored
+  `totalNtlPos` under the key `withdrawable`. Now reads the actual `withdrawable`
+  from account state (fallback `totalRawUsd`); `totalNtlPos` moved to its own key.
+- **Hardcoded Telegram creds (trader_pingpong.py:23–24):** moved to env/config
+  lookup (`TG_TOKEN`, `TG_CHAT_ID`). Token never in source anymore.
+- **Unused imports:** removed `from typing import Optional` in both files.
+
+### Why
+Live data from 2026-04-23 session: 31 trips, 7W/24L (23% WR), avg trip net
+-$0.037, trip_fee_ratio 3798×, portfolio -$5.33/hr. Tracing the log showed
+"OVERWEIGHT FORCE CLOSE" firing on nearly every fill — the strategy never
+got the chance to earn the spread because it force-closed at a taker fee
+~2s after every maker fill. This is the #1 mechanism behind the $90 → $60
+drawdown. Winners in the dataset (APE +$0.101 @ 24min hold, PENDLE +$0.039
+@ 7min hold) all survived this path by coincidence of timing.
+
+### Recommended config.json (apply on VPS, not committed)
+- `pairs`: `["PENDLE-PERP"]` — drop ARK (spread 2–4bps) and APE (spread 4–8bps),
+  both below the round-trip fee floor. PENDLE showed real 11–17bps spreads
+  and is the only pair with winning trips in the dataset.
+- `min_spread_bps`: 15 → 25
+- `safety_bps_strict`: 4.0 → 8.0
+- `order_size_usd`: keep 25
+
+### Deploy
+```
+ssh ubuntu@44.205.58.31
+cd ~/hyperliquid-sol && git fetch bot && git checkout feat/funding-scanner && git pull bot feat/funding-scanner
+# edit config.json per above
+# restart MM process (tmux / systemd — verify which is respawning it)
+```
+
 ## 2026-04-17 — Funding-rate scanner leg (feat/funding-scanner)
 
 ### Added

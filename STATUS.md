@@ -8,12 +8,23 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
+| **Version tag** | `v2.14.0` |
 | **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
-| **MM leg (trader.py)** | STOPPED (was bleeding $0.75/hr — spreads collapsed below gate) |
-| **Funding scanner leg** | LIVE (screen `fscan`) — $30 notional cap, maker-only |
-| **Profitable?** | MM: no. Scanner: TBD — running since 2026-04-17 21:23 UTC. |
+| **MM leg (trader.py)** | RUNNING (not stopped as previously noted — was silently respawned). Bleeding ~$5/hr at pre-v2.14 settings; fixes now pending deploy. |
+| **Funding scanner leg** | LIVE — WLD LONG down -86% ROE (-$1.29 unrealized on $1.34 equity wallet). Price move > funding yield. |
+| **Portfolio** | Bot wallet $61.39 (down from $66.72 this session, down from ~$90 lifetime). |
+| **Profitable?** | No on both legs. Pending rescue. |
 | **Slywatch** | ACTIVE — auto-commit + auto-push to GitHub |
-| **Last updated** | 2026-04-17 |
+| **Last updated** | 2026-04-23 |
+
+## Rescue Actions Required (2026-04-23)
+
+1. **Close WLD long immediately** — one more 2% adverse move liquidates.
+2. **Deploy v2.14.0 fixes to VPS** — see CHANGELOG 2026-04-23 for the patch.
+3. **Update VPS config.json** — drop ARK-PERP and APE-PERP (permanent negative-edge);
+   keep PENDLE-PERP only; raise `min_spread_bps` 15 → 25; raise `safety_bps_strict` 4.0 → 8.0.
+4. **Investigate why MM leg restarted** — STATUS said STOPPED on 2026-04-17, live data shows
+   it was fill-ticking. Check systemd/tmux/crontab on VPS.
 
 ## Current Strategy
 
