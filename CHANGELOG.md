@@ -1,5 +1,41 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.16.0 — Strategy library + position-sizing math
+
+### Added
+- `strategies/sizing.py` — three sizing methods, each with explicit math:
+  `fixed_fractional`, `fractional_kelly` (half-Kelly default, never full),
+  `vol_scaled` for equal-risk across assets. Hard 20% cap per position
+  enforced at the end of every path. `break_even_bps()` helper returns the
+  minimum edge a strategy must capture to survive fees at our tier
+  (5 bps maker/maker, 14 bps taker/taker).
+- `strategies/earnings_drift.py` — Post-Earnings Announcement Drift
+  (Bernard & Thomas 1989). Signal fires on > 5% EPS surprise; half-stop at
+  8%, target at 16%, hold window 45 days. Weighted by surprise magnitude.
+  Broker interface stubbed — TODO to wire Alpaca + Finnhub (both have free
+  tiers with fractional shares / API access). Math runs today; user sees
+  $11.44 size at $61 account on a +15% surprise.
+- `strategies/trend_follow.py` — 50/200 dual MA on Hyperliquid perps,
+  long-only, daily tick. Vol-scaled sizing so BTC (3% daily vol) gets less
+  notional than DOGE (10% daily vol). This is what captures "BTC went up"
+  moves that the delta-neutral MM bot never participated in.
+- `docs/MATH.md` — the equations. Fixed fractional, Kelly, vol-scaled, all
+  with worked examples at $61 account size. PEAD equation, trend equation,
+  funding-harvest equation, stat-arb equation. Fee budget math showing why
+  any strategy with < 5 bps expected edge loses at our tier. Realistic
+  year-ahead expectation table: $4-$17 total on a $61 account across four
+  strategies. Not get-rich-quick. Positive expected value.
+
+### Why
+User asked: "if a company has good earnings we should be able to put a
+dollar in there, find equations and quant math, proportional to account."
+Answer: PEAD + fractional-share brokers (Alpaca) makes the $1-stock-buy
+thesis actually implementable; the math is in sizing.py. This commit puts
+both the math and a reference implementation in the repo so future strategy
+work doesn't reinvent either. Every strategy delegates sizing to a single
+module so we can never again size from a naked constant (the root cause of
+the v2.13 $30 drawdown documented in POSTMORTEM.md).
+
 ## 2026-04-23 — v2.15.0 — Preflight config validator + strategy docs
 
 ### Added

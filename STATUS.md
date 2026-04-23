@@ -8,7 +8,7 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.15.0` |
+| **Version tag** | `v2.16.0` |
 | **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
 | **MM leg (trader.py)** | RUNNING (not stopped as previously noted — was silently respawned). Bleeding ~$5/hr at pre-v2.14 settings; fixes now pending deploy. |
 | **Funding scanner leg** | LIVE — WLD LONG down -86% ROE (-$1.29 unrealized on $1.34 equity wallet). Price move > funding yield. |
