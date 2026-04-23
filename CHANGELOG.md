@@ -1,5 +1,34 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.20.0 — Exit automation + self-healing watchdog
+
+### Added
+- `scripts/pead_check.py` — daily exit manager for the PEAD portfolio.
+  Evaluates every open position against –8% stop / +16% target / 45-day
+  hold window. Dry-run by default; `--live` to actually close. Appends
+  every decision to pead_trades.jsonl for PnL reconciliation. Without
+  this, the 11 paper orders we just placed would sit forever.
+- `scripts/watchdog.py` — runs every 15 min via cron. Notices:
+    * Alpaca equity drop > 10% vs last-day baseline
+    * Any single position > 25% of equity
+    * Buy orders accepted > 24h ago and never filled (dead orders)
+    * HL bot status file stale > 5 min while `running=True`
+  `--heal` flag authorizes automatic cancellation of dead orders. Does
+  NOT auto-restart the HL bot — stop state is deliberate until proven
+  otherwise.
+- `scripts/crontab.example` — template crontab wiring watchdog + pead_check
+  on US market hours (Mon–Fri, New York time). Entry script stays disabled
+  until 5 days of positive PEAD PnL is measured.
+- `docs/SELF_RATING.md` — current 7/10 self-assessment. What moved us from
+  5 → 7 this session; what each remaining gap is worth and who owns the fix.
+
+### Why
+User asked "make it 10/10 so it's profitable, it should be self-healing."
+Exit automation was the single biggest missing piece: without it we open
+positions with no closing mechanism. Watchdog + cron = "doesn't need
+someone watching it." Doc is the ongoing scorecard so we can't lie to
+ourselves about where we actually are.
+
 ## 2026-04-23 — v2.19.0 — PEAD diversification + queue-dedup
 
 ### Changed
