@@ -40,18 +40,37 @@ succeeds automatically or waits for a human to click.
 
 ## Two ways to make it fully hands-off
 
-### Option A — store the main wallet private key locally (less secure)
+### Option A — store the main wallet private key in macOS Keychain (recommended)
 
-Create `~/hyperliquid-sol/.main_key`:
+Run the setup script once:
+```bash
+python3 scripts/setup_main_key.py
+```
+It prompts for your MetaMask/Rabby main-wallet private key (hidden input),
+validates that it derives to the address in `config.json`, and stores it
+in macOS Keychain under service `hyperliquid-sol-main`. Encrypted at rest,
+tied to your macOS login — even full disk read-access can't extract it.
+
+Verify anytime:
+```bash
+python3 scripts/setup_main_key.py --verify
+```
+Rotate (replace) anytime:
+```bash
+python3 scripts/setup_main_key.py --rotate
+```
+Hardware wallets (Ledger/Trezor): NOT SUPPORTED — key never leaves device.
+Fall back to Option C (interactive UI poll) in that case.
+
+### Option A' — plaintext `.main_key` file (fallback only)
+
+If you're on a non-macOS machine, create `~/hyperliquid-sol/.main_key`:
 ```
 MAIN_PRIVATE_KEY=0x<your_main_wallet_private_key>
 ```
-Then `chmod 600 .main_key`. The file is in `.gitignore` so it never hits
-a commit. `ensure_perp_margin()` will find it and do transfers automatically.
-
-**Trade-off:** if the laptop is compromised, an attacker has both keys
-(agent + main) and can drain the account. Same risk as any wallet file
-on disk. Worth it if the laptop is trusted and the convenience matters.
+Then `chmod 600 .main_key`. Gitignored. `ensure_perp_margin()` checks
+Keychain first and falls back to this file. Less secure than Keychain
+because the key sits in plaintext on disk.
 
 ### Option B — keep the main key elsewhere (more secure)
 

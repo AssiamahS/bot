@@ -39,6 +39,7 @@ MAIN_KEY_PATH = REPO / ".main_key"
 POLL_INTERVAL_SECS = 30
 POLL_TIMEOUT_SECS = 600  # 10 min
 UI_URL = "https://app.hyperliquid.xyz/"
+KEYCHAIN_SERVICE = "hyperliquid-sol-main"
 
 
 def _perps_equity(info, wallet_addr: str) -> float:
@@ -51,7 +52,27 @@ def _spot_usdc(info, wallet_addr: str) -> float:
     return next((float(b["total"]) for b in state.get("balances", []) if b["coin"] == "USDC"), 0.0)
 
 
-def _load_main_key() -> Optional[str]:
+def _load_main_key_keychain(wallet_addr: str) -> Optional[str]:
+    """Read the main wallet private key from macOS Keychain.
+
+    Stored by scripts/setup_main_key.py. Encrypted at rest, tied to the
+    macOS login session. Requires user login on the machine; a stolen
+    laptop in a locked state cannot read this.
+    """
+    try:
+        import subprocess
+        r = subprocess.run([
+            "security", "find-generic-password",
+            "-a", wallet_addr,
+            "-s", KEYCHAIN_SERVICE,
+            "-w",
+        ], check=True, capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _load_main_key_file() -> Optional[str]:
     if not MAIN_KEY_PATH.exists():
         return None
     for line in MAIN_KEY_PATH.read_text().splitlines():
@@ -61,6 +82,15 @@ def _load_main_key() -> Optional[str]:
         if line.startswith("0x") and len(line) >= 64:
             return line
     return None
+
+
+def _load_main_key(wallet_addr: Optional[str] = None) -> Optional[str]:
+    """Try Keychain first (preferred, encrypted), then plaintext file fallback."""
+    if wallet_addr:
+        k = _load_main_key_keychain(wallet_addr)
+        if k:
+            return k
+    return _load_main_key_file()
 
 
 def _try_transfer(exchange, amount_usd: float, to_perp: bool = True) -> tuple[bool, str]:
@@ -111,10 +141,10 @@ def ensure_perp_margin(
 
     print(f"[margin] current signer cannot transfer: {msg[:160]}")
 
-    # Path 2 — try with main_key from .main_key file.
-    main_key = _load_main_key()
+    # Path 2 — try with main_key from Keychain (preferred) or .main_key file.
+    main_key = _load_main_key(main_wallet_addr)
     if main_key:
-        print(f"[margin] retrying with main key from .main_key...")
+        print(f"[margin] retrying with main key from secure storage...")
         from eth_account import Account
         from hyperliquid.exchange import Exchange
         from hyperliquid.utils import constants

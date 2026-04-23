@@ -1,5 +1,34 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.26.0 — Keychain-stored main key → full money control
+
+### Added
+- `scripts/setup_main_key.py` — stores the HL main-wallet private key in
+  macOS Keychain (service `hyperliquid-sol-main`, account = wallet addr).
+  Validates that the key derives to the address in `config.json` before
+  storing — rejects wrong keys with a loud error. Interactive,
+  getpass-hidden input, one-time setup. Supports `--verify` and
+  `--rotate`.
+- `strategies/margin_helper.py` now reads the main key from Keychain
+  first (preferred, encrypted at rest) and falls back to the plaintext
+  `.main_key` file if Keychain returns nothing. Existing code paths
+  automatically get the upgrade.
+
+### Why
+User wants code-level control of the money — transfers, vault deposits,
+withdraws — without hitting MetaMask every time. The HL architecture
+requires the main wallet key for these ops; the agent key in
+`config.json` can only trade. Keychain storage is the right compromise:
+encrypted at rest (tied to macOS login), invisible to `cat`, can't be
+extracted without user password, survives reboots. Full automation with
+a real security boundary.
+
+### Next step for the user
+```
+python3 scripts/setup_main_key.py
+```
+One prompt, paste the MetaMask main-wallet private key, done forever.
+
 ## 2026-04-23 — v2.25.0 — HIP-3 Exchange-meta fix + --no-transfer mode
 
 ### Fixed
