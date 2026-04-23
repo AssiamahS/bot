@@ -2380,6 +2380,30 @@ def close_orphan_positions(info, exchange, address):
 
 
 def main():
+    # Preflight: refuse to launch on broken math (force-close deadlock, etc).
+    # Override via PREFLIGHT=warn env var if a one-off needs it (never in prod).
+    try:
+        import preflight as _pf
+        _pf_fails = _pf.validate(
+            config,
+            trader_constants={
+                "MAX_INVENTORY_USD": MAX_INVENTORY_USD,
+                "MAX_POSITION_NOTIONAL": MAX_POSITION_NOTIONAL,
+            },
+        )
+        if _pf_fails:
+            mode = os.environ.get("PREFLIGHT", "strict").lower()
+            print("preflight: FAIL — config/math issues detected:")
+            for _m in _pf_fails:
+                print(f"  - {_m}")
+            if mode != "warn":
+                print("preflight: refusing to start. Fix config or set PREFLIGHT=warn to override.")
+                tg_send("❌ preflight blocked bot start — check VPS logs")
+                sys.exit(1)
+            print("preflight: PREFLIGHT=warn set, continuing anyway.")
+    except ImportError:
+        print("preflight: module not found, skipping checks")
+
     print("=" * 55)
     print("  Hyperliquid Market Maker (Event-Driven)")
     print(f"  Pairs: {PAIRS}")

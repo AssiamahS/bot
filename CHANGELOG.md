@@ -1,5 +1,47 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.15.0 — Preflight config validator + strategy docs
+
+### Added
+- `docs/POSTMORTEM.md` — commit-by-commit walkthrough of the $90 → $60
+  drawdown. Maps each $ lost to a cause, traces when the force-close bug
+  was introduced (2026-03-13 "doctor round 5"), and lists outstanding
+  action items (investigate bot auto-respawn, rotate keys, etc).
+- `docs/MCP_SETUP.md` — inventory of every MCP tool used, with current
+  status (works / broken / gap). `bot_config_set` is documented as broken,
+  `mcp__telegram__*` as session-locked, direct-SSH as a gap.
+- `preflight.py` — config + math sanity checker, run automatically at
+  `trader.main()` startup. Refuses to launch if any of these are true:
+  - `MAX_INVENTORY_USD < ORDER_SIZE_USD * 1.1` (the v2.13 force-close
+    deadlock that cost ~$15–25)
+  - `MAX_POSITION_NOTIONAL < ORDER_SIZE_USD * 1.5`
+  - `min_spread_bps < 2*maker_fee + 2bps edge target`
+  - `safety_bps_strict < 2*maker_fee`
+  - A pair in `pairs` is on the `KNOWN_BAD_PAIRS` list or has observed
+    natural spread below required gate (ARK, BTC, ETH currently flagged
+    for our fee tier).
+  Override with `PREFLIGHT=warn` env var for dev/debug only.
+- `docs/WHY_WE_LOSE.md` — the honest math of the $90 → $60 drawdown.
+  Documents fees vs spreads, adverse selection, and the force-close bug
+  mechanism.
+- `docs/WINNING_PLAYBOOK.md` — five strategies with verifiable track
+  records (maker-rebate farming, funding harvest, pairs/stat-arb, trend
+  following, cross-exchange arb) with honest notes on which are viable at
+  our account size.
+- `docs/DIRECTIONAL.md` — answers "why didn't I make money when BTC went
+  up?" MM is delta-neutral by design; covers HODL, trend-following, and
+  copy-trading as ways to actually participate in upside.
+- `docs/LEADERBOARDS.md` — pointers to Hyperliquid's on-chain leaderboard
+  (app.hyperliquid.xyz/leaderboard) plus beacontrade.io and
+  hyperliquidi.com so we can study who's actually winning.
+
+### Why
+User asked "why am I losing all this money, how do others make money, we
+should be able to trade anything, write it down in the repo." Without
+documented math and a startup guard, another silent regression (like v2.13
+flipping `MAX_INVENTORY_USD` from 35 to 3.5) would drain the account again.
+The repo now fails loudly instead of bleeding quietly.
+
 ## 2026-04-23 — v2.14.0 — Force-close deadlock fix + TG token de-hardcode
 
 ### Fixes
