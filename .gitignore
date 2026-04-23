@@ -10,3 +10,4 @@ config.json
 perf_journal.jsonl
 hummingbot-api/
 .alpaca_keys
+.finnhub_key

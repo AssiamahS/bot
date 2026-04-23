@@ -1,5 +1,25 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.18.0 — Finnhub earnings feed + first PEAD trade script
+
+### Added
+- `scripts/first_pead_trade.py` — fetches Finnhub earnings calendar,
+  filters for > 5% EPS surprises, sizes via `strategies.sizing`, and
+  either previews (default) or places paper orders via the Alpaca broker
+  (`--live`). Logs each submission to `pead_trades.jsonl`.
+- `.finnhub_key` — gitignored, 600 perms, holds the free-tier API key.
+
+### Verified on live data
+Today's top positive surprises (Apr 20–23):
+```
+CCI  +161.5%  (Crown Castle, REIT)
+BDN  +153.1%  (Brandywine Realty)
+LBRT +145.2%  (Liberty Oilfield Services)
+```
+Dry run sized each at $187.50 on the $1K paper account (18.75% of equity,
+under the 20% cap). All three beat enough to clear the 5% noise floor
+and then some.
+
 ## 2026-04-23 — v2.17.0 — Alpaca paper broker wired end-to-end
 
 ### Added
