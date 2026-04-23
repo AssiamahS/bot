@@ -1,5 +1,35 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.22.0 — Leaderboard reverse-engineering
+
+### Added
+- `docs/REVERSE_ENGINEER.md` — pulled all 34,628 HL leaderboard wallets,
+  filtered for "copyable" size ($10K–$10M, > $1K PnL, > $100K volume),
+  ranked with `log(pnl) * sqrt(roi)`. Identified three distinct winning
+  archetypes and analyzed 300 recent fills of each:
+  - **HIP-3 commodity shorts** (`0x863b676e5e...`, $1.3M acct, +$4.85M
+    PnL): systematic short on `xyz:BRENTOIL` + `xyz:CL`. 300/300 fills
+    `Open Short`. This matches exactly the `hip3-funding-harvest-test`
+    strategy in `autoresearch/` that backtested at Sharpe 21.
+  - **Directional swing** (`0x42b9493c50...`, $800K acct, +$3.63M PnL on
+    only $3.64M volume): concentrated bets on `@107`. 99.8% PnL/volume
+    ratio but currently –$25K in drawdown. Not copyable at $60.
+  - **Rebate HFT** (`0x29998ebd5b...`, $42K acct, +$2.21M PnL on $1.42B
+    volume): the `$6.8K → $1.5M` archetype. 33,833× turnover. Requires
+    maker-rebate tier, unreachable at our volume.
+- Conclusion: only HIP-3 commodity harvesting is copyable at our size.
+  Expected $36/year on $60 from that leg alone at conservative turnover.
+  Stack with PEAD (+$15/yr) and BTC HODL (+$2-20/yr depending) =
+  $50-80/yr positive EV across three uncorrelated streams.
+
+### Discovered while running v2.21's --live
+- HL agent-wallet pattern: the private key in `config.json` signs as
+  `0xa6693a...` (agent) but the main wallet is `0x253831...`. Agents can
+  trade on behalf of the main, but can't transfer spot→perps — only the
+  main wallet's key can. crypto_hodl.py's auto-transfer step fails here;
+  user must do that transfer manually in the HL web UI before the basket
+  will fire. Documented in REVERSE_ENGINEER.md.
+
 ## 2026-04-23 — v2.21.0 — HL crypto HODL basket (BTC/ETH/SOL/HYPE at 1x)
 
 ### Added
