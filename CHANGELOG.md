@@ -1,5 +1,38 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.24.0 — HIP-3 funding harvester live
+
+### Added
+- `scripts/hip3_funding.py` — scanner+entry for HL's 66 synthetic perps
+  (stocks: TSLA/NVDA/COIN/HOOD/PLTR/etc., commodities: GOLD/SILVER/CL/
+  BRENTOIL, indices: XYZ100/KR200/JP225, etc.). For each market:
+    score = |funding_rate − BASELINE|
+    filter: OI ≥ $10K, funding percentile ≥ 80th of last 7 days own history
+  Enters SHORT when funding is extremely positive (longs pay, we collect),
+  LONG when extremely negative. 1% risk per trade at 3% stop → $20
+  notional at current $61 account. Caps at 5 concurrent positions and
+  50% of total capital. Uses `margin_helper.ensure_perp_margin` so the
+  spot→perps dance is no longer a blocker.
+- `scripts/hip3_check.py` — daily/hourly exit manager. Closes positions
+  that hit stop (-3%) / target (+6%) / funding-normalized
+  (|fr| < 1.5× baseline) / hold-expired (7 days).
+- `scripts/crontab.example` — hourly entry + exit crons for HIP-3,
+  independent of US market hours (HL is 24/7).
+
+### Verified (dry run)
+```
+wallet 0x253831C3…  perps=$1.36  spot=$60.01  total=$61.37
+[scan] 66 HIP-3 markets pulled
+[scan] 3 pass entry+percentile filter
+candidates:
+  xyz:KR200  long  fr=-0.0433%/hr  82%ile  OI=$98K  mid=$974.95
+  xyz:JP225  (budget exhausted)
+  xyz:DKNG   (budget exhausted)
+```
+KR200 at –0.0433%/hr = –379% annualized funding. A LONG there collects
+~1% per day from funding alone if price stays flat. That's the #1
+leaderboard trader's playbook, applied to our $61 account.
+
 ## 2026-04-23 — v2.23.0 — Margin helper: "where's my money" solved forever
 
 ### Added

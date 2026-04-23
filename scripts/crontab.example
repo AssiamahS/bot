@@ -18,3 +18,13 @@ PATH=/usr/local/bin:/usr/bin:/bin:/Users/djsly/.pyenv/shims
 
 # Every 15 minutes during market hours — watchdog sanity check
 */15 9-16 * * 1-5 cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/watchdog.py >> logs/watchdog.log 2>&1
+
+# === HIP-3 funding harvester (Hyperliquid, 24/7) ===
+# Crypto/HL markets run 24/7, not constrained to US market hours.
+# Funding settles hourly on HL, so we scan+check hourly.
+
+# Every hour: scan for new extreme-funding entries on HIP-3 perps
+5 * * * * cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/hip3_funding.py --live >> logs/hip3_entry.log 2>&1
+
+# Every hour (offset 15 min): evaluate exits for existing HIP-3 positions
+20 * * * * cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/hip3_check.py --live >> logs/hip3_check.log 2>&1
