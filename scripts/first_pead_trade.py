@@ -83,7 +83,13 @@ def append_log(record: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=2, help="earnings calendar lookback")
-    ap.add_argument("--top", type=int, default=3, help="number of top positive surprises to trade")
+    ap.add_argument("--top", type=int, default=10, help="max number of positions (diversification)")
+    ap.add_argument("--per-position-pct", type=float, default=0.05,
+                    help="fraction of equity per position (default 5%% for diversification)")
+    ap.add_argument("--max-deploy-pct", type=float, default=0.60,
+                    help="cap total deployed at this fraction of cash (default 60%%)")
+    ap.add_argument("--min-price", type=float, default=3.0,
+                    help="skip tickers under this price (penny-stock noise)")
     ap.add_argument("--live", action="store_true", help="actually place paper orders")
     args = ap.parse_args()
 
@@ -125,44 +131,65 @@ def main() -> int:
         print("no qualifying surprises — nothing to trade")
         return 0
 
-    # Fetch current prices for top N
-    picks = positive[: args.top]
-    print(f"\ntop {len(picks)} candidates:")
-    print(f"  {'SYM':<7} {'SURP':>8} {'ACT':>7} {'EST':>7} {'PRICE':>9} {'SIZE':>9} {'PCT':>6}")
+    # Already-held OR already-queued tickers to skip (don't double up). Orders
+    # placed before market open are 'accepted' not filled, so checking positions
+    # alone misses same-session duplicates.
+    held = {p["symbol"]: p for p in broker.positions()}
+    open_orders = broker.orders(status="open", limit=100)
+    queued = {o["symbol"]: o for o in open_orders if o.get("side") == "buy"}
+    blocked = {**held, **queued}
+    if blocked:
+        print(f"already held/queued: {', '.join(sorted(blocked))}")
+
+    # Diversified sizing: equal-weight per position at --per-position-pct of equity,
+    # capped at --max-deploy-pct of cash total. Take the top N by surprise.
+    per_pos_usd = equity * args.per_position_pct
+    budget_usd = cash * args.max_deploy_pct
+    print(f"budget: ${budget_usd:.2f} ({args.max_deploy_pct*100:.0f}% of cash), "
+          f"${per_pos_usd:.2f}/position ({args.per_position_pct*100:.1f}% of equity)")
 
     actions = []
-    for surp, ev in picks:
+    skipped = 0
+    print(f"\ncandidates (surprise desc):")
+    print(f"  {'SYM':<7} {'SURP':>8} {'ACT':>7} {'EST':>7} {'PRICE':>9} {'SIZE':>9}  NOTE")
+
+    for surp, ev in positive:
+        if len(actions) >= args.top:
+            break
+        if sum(a["size_usd"] for a in actions) + per_pos_usd > budget_usd:
+            break
         sym = ev["symbol"]
+        if sym in blocked:
+            skipped += 1; continue
         try:
             price = float(broker.latest_trade(sym)["trade"]["p"])
-        except Exception as exc:
-            print(f"  {sym:<7}  price fetch failed: {exc}")
-            continue
+        except Exception:
+            skipped += 1; continue
+        if price < args.min_price:
+            print(f"  {sym:<7} {surp*100:>+7.1f}%                          ${price:>8.2f}            penny-stock skip")
+            skipped += 1; continue
 
         event = EarningsEvent(
             ticker=sym,
             announced_on=date.fromisoformat(ev["date"]),
             estimated_eps=float(ev["epsEstimate"]),
             actual_eps=float(ev["epsActual"]),
-            price_at_announce=price,  # approximation — we don't have price-at-announce
+            price_at_announce=price,
             price_current=price,
         )
         if signal(event) <= 0:
-            print(f"  {sym:<7}  filtered out by signal()")
-            continue
-        size_usd = size_position(equity, event)
+            skipped += 1; continue
+        size_usd = min(per_pos_usd, cash * 0.95)  # equal-weight diversified
         if size_usd < 1.0:
-            print(f"  {sym:<7}  size ${size_usd:.2f} < $1 min, skipping")
-            continue
-        if size_usd > cash:
-            size_usd = cash * 0.95
-        pct = size_usd / equity * 100
+            skipped += 1; continue
         print(f"  {sym:<7} {surp*100:>+7.1f}% {event.actual_eps:>7.2f} {event.estimated_eps:>7.2f} "
-              f"${price:>8.2f} ${size_usd:>8.2f} {pct:>5.1f}%")
+              f"${price:>8.2f} ${size_usd:>8.2f}")
         actions.append({"symbol": sym, "size_usd": size_usd, "price": price,
                         "surprise_pct": surp, "actual_eps": event.actual_eps,
                         "estimated_eps": event.estimated_eps})
-        cash -= size_usd  # track remaining budget for next pick
+        cash -= size_usd
+    if skipped:
+        print(f"  ({skipped} skipped — held, penny-stock, or no quote)")
 
     if not actions:
         print("\nno placeable actions")

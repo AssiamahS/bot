@@ -1,5 +1,24 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.19.0 — PEAD diversification + queue-dedup
+
+### Changed
+- `scripts/first_pead_trade.py` — default behavior flipped from "top 3
+  concentrated at 18.75% each" to "top 10 diversified at 5% each, capped
+  at 60% of cash deployed." Penny-stock skip at $3 min. Dedup against
+  both `/v2/positions` AND `/v2/orders?status=open` so we don't double up
+  on tickers from a prior same-session run (the reason I fixed this on
+  second execution — it tried to re-buy CCI and LBRT from the v2.18 run).
+- New flags: `--per-position-pct`, `--max-deploy-pct`, `--min-price`.
+
+### Why
+User asked "can this run all S&P 500 stocks at once?" — yes, and the
+wider basket actually fits the PEAD edge better. Academic result relies
+on a diversified portfolio (20+ names), not concentrated bets on 3.
+Penny-stock filter prevents the noise-heavy sub-$3 names from eating the
+budget. Queue-dedup means we can re-run the script safely without
+double-allocating to the same ticker.
+
 ## 2026-04-23 — v2.18.0 — Finnhub earnings feed + first PEAD trade script
 
 ### Added
