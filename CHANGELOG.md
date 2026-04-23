@@ -1,5 +1,34 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.23.0 — Margin helper: "where's my money" solved forever
+
+### Added
+- `strategies/margin_helper.py` `ensure_perp_margin()` — tiered fallback
+  that makes spot-vs-perps balance-location invisible to strategy code:
+  1. If perps already has enough margin, return immediately.
+  2. Try `usd_class_transfer` with whatever key is in config.json (works
+     for non-agent wallets).
+  3. If that fails and `.main_key` exists at repo root (gitignored, 600
+     perms), load it and retry the transfer with that key.
+  4. If still no luck, print the HL UI URL + exact amount needed, then
+     poll `clearinghouseState` every 30s up to 10 min — auto-continues
+     the moment the user's manual transfer lands.
+- `docs/HL_WALLETS.md` — explains the two-wallet (agent + main)
+  architecture HL recommends, why transfers fail with agent keys, the
+  two user paths: (A) store main key in `.main_key` for fully automatic
+  ops, or (B) approve via UI when the poll fires.
+
+### Changed
+- `scripts/crypto_hodl.py` now calls `ensure_perp_margin()` instead of
+  doing its own transfer attempt. Same logic is now reusable by
+  `hip3_funding.py` and every future HL strategy.
+
+### Why
+User (rightly) frustrated that every HL-script attempt hit the same
+"transfer failed" wall. Root cause is HL's agent-wallet security model
+(correct design, annoying UX). Fix: put the fallback logic behind one
+reusable helper so strategy code never has to know about it.
+
 ## 2026-04-23 — v2.22.0 — Leaderboard reverse-engineering
 
 ### Added

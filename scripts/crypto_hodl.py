@@ -42,6 +42,7 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
 
 from strategies import sizing
+from strategies.margin_helper import ensure_perp_margin
 
 
 LOG_PATH = REPO / "crypto_positions.jsonl"
@@ -181,18 +182,13 @@ def main() -> int:
     # doesn't auto-flatten these positions.
     ensure_orphan_exempt(args.coins)
 
-    # Move USDC spot → perps if needed.
-    if transfer_needed > 0:
-        try:
-            tr = exchange.usd_class_transfer(transfer_needed, to_perp=True)
-            print(f"  transfer ${transfer_needed:.2f} spot→perps: {tr}")
-            log({"event": "spot_to_perps", "amount_usd": transfer_needed, "resp": str(tr)[:200]})
-            # Small wait for balance to update clearinghouse-side.
-            time.sleep(3)
-        except Exception as e:
-            print(f"  transfer failed: {e}")
-            log({"event": "spot_to_perps_failed", "error": str(e)})
-            return 1
+    # Ensure perps has enough margin — handles agent-vs-main key fallback,
+    # polls for manual UI transfer if needed. No more "re-run the script
+    # after the transfer" workflow.
+    if not ensure_perp_margin(info, exchange, wallet, margin_needed, interactive=True):
+        print("  could not secure margin — aborting")
+        log({"event": "margin_ensure_failed", "needed": margin_needed})
+        return 1
 
     print(f"\nLIVE — setting 1x leverage and submitting {len(actions)} orders")
     for a in actions:
