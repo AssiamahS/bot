@@ -1,5 +1,31 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-04-23 — v2.17.0 — Alpaca paper broker wired end-to-end
+
+### Added
+- `strategies/_alpaca_broker.py` — concrete `AlpacaBroker` implementing
+  the `BrokerInterface` protocol from `earnings_drift.py`. Pure stdlib
+  (urllib + json); no alpaca-py dependency. Supports account read,
+  position list, fractional-share notional market buys (Alpaca $1 min),
+  share-qty sells, order list/cancel, latest-trade price lookup.
+- `scripts/alpaca_smoke_test.py` — end-to-end check: loads `.alpaca_keys`,
+  hits `/v2/account`, fetches AAPL latest trade, simulates a +15% EPS
+  surprise, and reports the dollar size PEAD would submit. Does NOT
+  place any order. Run before every live-ish session.
+- `.gitignore` — `.alpaca_keys` excluded (`chmod 600`). Keys live only on
+  the local filesystem, never in git.
+
+### Verified end-to-end
+Paper account `PA3AVAG3J1DC`, $1,000 starting equity. Smoke test output:
+```
+surprise_pct: +15.00%
+signal:       +1
+size (USD):   $187.50  (18.75% of equity — under 20% cap)
+```
+The next PEAD event with a >5% surprise will be the first live (paper)
+trade through this stack. `scripts/first_pead_trade.py` to follow once we
+wire an earnings calendar feed (Finnhub free tier or yfinance).
+
 ## 2026-04-23 — v2.16.0 — Strategy library + position-sizing math
 
 ### Added
