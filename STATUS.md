@@ -8,14 +8,14 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.26.0` |
-| **Running on VPS** | `ubuntu@44.205.58.31:~/hyperliquid-sol/` |
-| **MM leg (trader.py)** | RUNNING (not stopped as previously noted — was silently respawned). Bleeding ~$5/hr at pre-v2.14 settings; fixes now pending deploy. |
-| **Funding scanner leg** | LIVE — WLD LONG down -86% ROE (-$1.29 unrealized on $1.34 equity wallet). Price move > funding yield. |
-| **Portfolio** | Bot wallet $61.39 (down from $66.72 this session, down from ~$90 lifetime). |
-| **Profitable?** | No on both legs. Pending rescue. |
-| **Slywatch** | ACTIVE — auto-commit + auto-push to GitHub |
-| **Last updated** | 2026-04-23 |
+| **Version tag** | `v2.26.2` |
+| **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
+| **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
+| **HIP-3 funding harvester** | RELAUNCHED 2026-06-09 after fixing launchd kill-loop (see CHANGELOG v2.26.2). 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. Had been crash-looping since Jun 9 02:48 with zero fills. |
+| **Portfolio** | $89.57 USDC spot + $4.05 Arbitrum. Perps $0 → $80 transfer initiated (Keychain main key; pending Keychain Allow click). |
+| **Profitable?** | Unproven. No fills since Apr 23. Watch live_logs/ for first harvester cycles. |
+| **Slywatch** | INACTIVE (was on dead VPS). Manual commits + tag + push to `bot` remote. |
+| **Last updated** | 2026-06-09 |
 
 ## Rescue Actions Required (2026-04-23)
 

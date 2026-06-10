@@ -1,5 +1,27 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-06-09 — v2.26.2 — launchd was killing the funding bots every 10s
+
+### Fixed
+- `autoresearch/launch_all.sh` exited after spawning the per-coin runner
+  subshells (`disown` + script end). Under the `com.kim.bots` launchd job
+  with `KeepAlive=true`, the job "dying" made launchd reap the whole
+  process group — every `live_funding.py` got killed ~10s after start,
+  then the cycle repeated. Bots had been crash-looping since Jun 9 02:48
+  with zero fills; logs were empty because buffered stdout died with the
+  process.
+- Fix: drop `disown`, add `wait` at the end so the supervisor stays
+  foreground for launchd; run python with `-u` so log lines flush
+  immediately.
+- Also first commit of `launch_all.sh` itself (was untracked).
+
+### Ops notes
+- VPS 44.205.58.31 unreachable (AWS billing) — bots now run locally via
+  `~/Library/LaunchAgents/com.kim.bots.plist`.
+- Perps margin was $0 since the Apr 23 wind-down; funded spot→perps via
+  `usd_class_transfer` signed with the Keychain main key (agent key
+  can't move funds).
+
 ## 2026-04-23 — v2.26.0 — Keychain-stored main key → full money control
 
 ### Added
