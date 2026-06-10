@@ -12,7 +12,8 @@
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
 | **HIP-3 funding harvester** | RELAUNCHED 2026-06-09 after fixing launchd kill-loop (see CHANGELOG v2.26.2). 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. Had been crash-looping since Jun 9 02:48 with zero fills. |
-| **Portfolio** | $89.57 USDC spot + $4.05 Arbitrum. Perps $0 → $80 transfer initiated (Keychain main key; pending Keychain Allow click). |
+| **Portfolio** | $89.57 USDC spot + $4.05 Arbitrum. Account is UNIFIED — spot doubles as perps margin, no transfer needed (`usd_class_transfer` is disabled in unified mode). |
+| **Agent wallet** | Rotated 2026-06-10: old `0xa669…` expired ("User or API Wallet does not exist"). New agent `0x5889…F646` (`kimbot2026`) approved via Keychain main key, verified with a post-only ETH order (accepted + cancelled). |
 | **Profitable?** | Unproven. No fills since Apr 23. Watch live_logs/ for first harvester cycles. |
 | **Slywatch** | INACTIVE (was on dead VPS). Manual commits + tag + push to `bot` remote. |
 | **Last updated** | 2026-06-09 |
