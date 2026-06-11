@@ -1,5 +1,29 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-06-11 — v2.26.4 — maker quotes treated as errors + order stacking
+
+First live order since April went out at 10:07 UTC (open_short 0.074
+xyz:NVDA @ 203.45, funding apy +29.5%) and the exchange accepted it
+resting — proving the v2.26.3 dex fixes end-to-end.
+
+### Fixed
+- `live_funding.py` only recognised `filled` in the order response, so a
+  post-only (Alo) quote resting on the book — the *normal* maker outcome
+  — was logged as `❌ order error`. Now handled as its own ⏳ case.
+- Order stacking: an unfilled resting quote + unchanged signal meant a
+  new order every poll (600s), each one stacking on the book. A price
+  sweep could have filled several at once (2–3× intended size). Now any
+  open order on the coin is cancelled before re-quoting, which also
+  re-prices stale quotes at the fresh mid.
+- Gotcha found while testing: `info.open_orders()` is **per-dex** —
+  without `dex="xyz"` it returns `[]` even when an xyz order is resting.
+  The cancel loop passes the coin's dex.
+
+### Ops notes
+- Intermittent local DNS failures (Errno 8, ~1 per few polls across the
+  fleet) — loop catches them, skips the poll, retries in 600s. Benign
+  unless the rate climbs.
+
 ## 2026-06-11 — v2.26.3 — funding bots couldn't see or trade HIP-3 markets
 
 ### Fixed

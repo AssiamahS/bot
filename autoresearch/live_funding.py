@@ -187,6 +187,17 @@ def main():
                     notify.send(f"⛔ {reason}", silent=True)
                 else:
                     is_buy = decision in ("open_long", "close_short")
+                    # cancel any quote still resting from a previous poll so
+                    # maker orders re-price instead of stacking on the book
+                    # (open orders are per-dex — must query the coin's dex)
+                    coin_dex = args.coin.split(":", 1)[0] if ":" in args.coin else ""
+                    for o in info.open_orders(addr, dex=coin_dex):
+                        if o["coin"] == args.coin:
+                            try:
+                                exch.cancel(args.coin, o["oid"])
+                                print(f"  cancelled stale order oid={o['oid']}")
+                            except Exception as e:
+                                print(f"  cancel failed oid={o['oid']}: {e}")
                     mid = fetch_mid(args.coin)
                     raw_size = args.usd / mid if "open" in decision else abs(our_size)
                     size = round_size(raw_size, sz_decimals)
@@ -208,6 +219,13 @@ def main():
                             print(f"  {fill_msg}")
                             notify.send(fill_msg)
                             rm.record_fill(args.coin, args.usd, args.usd * 0.00045, decision, 0)
+                        elif statuses and "resting" in statuses[0]:
+                            # normal outcome for post-only (Alo) quotes; next
+                            # poll cancels and re-prices it if still unfilled
+                            oid = statuses[0]["resting"]["oid"]
+                            rest_msg = f"⏳ {decision} {size} {args.coin} resting @ ${px} (oid {oid})"
+                            print(f"  {rest_msg}")
+                            notify.send(rest_msg, silent=True)
                         else:
                             err_msg = f"❌ order error: {statuses}"
                             print(f"  {err_msg}")

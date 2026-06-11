@@ -8,10 +8,10 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.26.3` |
+| **Version tag** | `v2.26.4` |
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
-| **HIP-3 funding harvester** | RUNNING since 2026-06-09, 26h+ clean uptime. v2.26.3 fixed the two bugs that blocked all order placement: `allMids` missing the `dex` param ("no mid for xyz:SILVER") and SDK `Exchange` built without `perp_dexs` (no asset-id map for xyz). 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. First real fills expected next time funding crosses the open threshold. |
+| **HIP-3 funding harvester** | RUNNING since 2026-06-09. v2.26.3 fixed the two bugs that blocked all order placement (allMids missing `dex`, Exchange missing `perp_dexs`); v2.26.4 fixed resting-quote handling + order stacking. FIRST LIVE ORDER 2026-06-11 10:07 UTC: open_short 0.074 xyz:NVDA @ 203.45 (funding apy +29.5%), accepted resting (oid 465614381803). 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. |
 | **Portfolio** | $89.57 USDC spot + $4.05 Arbitrum. Account is UNIFIED — spot doubles as perps margin, no transfer needed (`usd_class_transfer` is disabled in unified mode). |
 | **Agent wallet** | Rotated 2026-06-10: old `0xa669…` expired ("User or API Wallet does not exist"). New agent `0x5889…F646` (`kimbot2026`) approved via Keychain main key, verified with a post-only ETH order (accepted + cancelled). |
 | **Profitable?** | Unproven. No fills since Apr 23. Watch live_logs/ for first harvester cycles. |
