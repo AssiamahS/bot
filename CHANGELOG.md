@@ -1,5 +1,27 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-06-11 — v2.26.3 — funding bots couldn't see or trade HIP-3 markets
+
+### Fixed
+- `autoresearch/live_funding.py` `fetch_mid()` called `allMids` without
+  the `dex` param. Builder-deployed (HIP-3) markets like `xyz:SILVER`
+  only appear in `allMids` when the dex is named, so every open attempt
+  died with `no mid for xyz:SILVER`. SILVER had been signalling
+  open_short for hours (funding apy ~18%) and never got a position on.
+- Second, latent bug behind the first one: `Exchange`/`Info` were
+  constructed without `perp_dexs`, so the SDK never built the
+  name→asset-id map for the xyz dex (HIP-3 ids live at 110000+). Even
+  with a mid, `exch.order("xyz:SILVER", ...)` would have KeyError'd.
+  Now passes `perp_dexs=["", <dex>]` derived from the coin arg.
+- Verified live: mid resolves (SILVER $64.50) and all five coins map
+  (SILVER→110026, MU→110015, NVDA→110002, AAPL→110009, TSLA→110001).
+  Bots bounced via pkill; runner loops respawned them on the new code.
+
+### Ops notes
+- 26h of clean uptime confirms the v2.26.2 launchd fix holds.
+- Perps account value reads $0 — that's expected, account is unified
+  (spot USDC doubles as margin). No transfer needed or possible.
+
 ## 2026-06-09 — v2.26.2 — launchd was killing the funding bots every 10s
 
 ### Fixed

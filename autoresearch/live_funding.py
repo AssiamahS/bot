@@ -70,7 +70,12 @@ def fetch_meta(coin_query: str) -> dict:
 
 
 def fetch_mid(coin: str) -> float:
-    mids = post({"type": "allMids"})
+    # HIP-3 markets (e.g. xyz:SILVER) only appear in allMids when the dex is named
+    if ":" in coin:
+        dex, _ = coin.split(":", 1)
+        mids = post({"type": "allMids", "dex": dex})
+    else:
+        mids = post({"type": "allMids"})
     if coin in mids:
         return float(mids[coin])
     raise ValueError(f"no mid for {coin}")
@@ -106,12 +111,14 @@ def main():
     rm = RiskManager(max_daily_loss_pct=args.max_daily_loss_pct, max_position_pct=50.0)
 
     # retry with backoff for the SDK init (it calls meta + spotMeta on construct)
+    # HIP-3 coins (dex:NAME) need their dex passed so the SDK maps name -> asset id
+    perp_dexs = [""] + ([args.coin.split(":", 1)[0]] if ":" in args.coin else [])
     info = exch = market_meta = None
     delay = 5
     for attempt in range(8):
         try:
-            info = Info(constants.MAINNET_API_URL, skip_ws=True)
-            exch = Exchange(wallet, constants.MAINNET_API_URL, account_address=addr)
+            info = Info(constants.MAINNET_API_URL, skip_ws=True, perp_dexs=perp_dexs)
+            exch = Exchange(wallet, constants.MAINNET_API_URL, account_address=addr, perp_dexs=perp_dexs)
             market_meta = fetch_meta(args.coin)
             break
         except Exception as e:
