@@ -1,5 +1,17 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-06-11 — v2.26.5 — Telegram alerts with underscores were dropped
+
+### Fixed
+- `notify.py` sends with `parse_mode: Markdown`; any message with an
+  unbalanced `_` or `*` — like every `open_short` / `close_short` alert —
+  got HTTP 400'd by Telegram and silently dropped. Now retries once as
+  plain text before giving up. Verified live ("sent" with an
+  `open_short` payload).
+- v2.26.4 cancel/re-quote path also verified live this cycle: NVDA bot
+  cancelled stale oid 465614381803, re-quoted at the fresh mid
+  ($203.45 → $203.14), new order resting as oid 465617141291.
+
 ## 2026-06-11 — v2.26.4 — maker quotes treated as errors + order stacking
 
 First live order since April went out at 10:07 UTC (open_short 0.074

@@ -8,7 +8,7 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.26.4` |
+| **Version tag** | `v2.26.5` |
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
 | **HIP-3 funding harvester** | RUNNING since 2026-06-09. v2.26.3 fixed the two bugs that blocked all order placement (allMids missing `dex`, Exchange missing `perp_dexs`); v2.26.4 fixed resting-quote handling + order stacking. FIRST LIVE ORDER 2026-06-11 10:07 UTC: open_short 0.074 xyz:NVDA @ 203.45 (funding apy +29.5%), accepted resting (oid 465614381803). 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. |

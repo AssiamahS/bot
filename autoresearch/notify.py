@@ -25,17 +25,26 @@ def send(msg: str, silent: bool = False) -> bool:
         print(f"[notify-skipped] {msg}")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    body = json.dumps({
-        "chat_id": chat, "text": msg,
-        "parse_mode": "Markdown", "disable_notification": silent,
-    }).encode()
-    req = request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    try:
+
+    def _post(parse_mode):
+        payload = {"chat_id": chat, "text": msg, "disable_notification": silent}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        req = request.Request(url, data=json.dumps(payload).encode(),
+                              headers={"Content-Type": "application/json"})
         with request.urlopen(req, timeout=10) as r:
             return r.status == 200
+
+    try:
+        return _post("Markdown")
     except Exception as e:
-        print(f"[notify-fail] {e}: {msg}")
-        return False
+        # unbalanced _ or * in msg (e.g. "open_short") makes Telegram 400
+        # the whole message — retry plain rather than drop the alert
+        try:
+            return _post(None)
+        except Exception:
+            print(f"[notify-fail] {e}: {msg}")
+            return False
 
 
 if __name__ == "__main__":
