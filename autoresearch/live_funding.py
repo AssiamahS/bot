@@ -39,19 +39,31 @@ def fetch_recent_funding(coin: str, hours: int) -> list[float]:
     return [float(r["fundingRate"]) for r in rows]
 
 
-def fetch_current_state(addr: str) -> dict:
-    return post({"type": "clearinghouseState", "user": addr})
+def coin_dex(coin: str) -> str:
+    return coin.split(":", 1)[0] if ":" in coin else ""
 
 
-def fetch_unified_equity(addr: str) -> float:
-    """Sum of perp accountValue + spot USDC (unified-mode total equity)."""
-    perp = post({"type": "clearinghouseState", "user": addr})
-    perp_eq = float(perp["marginSummary"]["accountValue"])
+def fetch_current_state(addr: str, dex: str = "") -> dict:
+    # clearinghouseState is per-dex: HIP-3 positions are invisible without
+    # the dex param, which made our_size read 0 and stack opens every poll
+    return post({"type": "clearinghouseState", "user": addr, "dex": dex})
+
+
+def fetch_unified_equity(addr: str, dex: str = "") -> float:
+    """Free spot USDC + perp accountValue per dex.
+
+    Spot 'total' includes the 'hold' backing HIP-3 margin, and each dex's
+    accountValue is that same margin +/- unrealized PnL — summing totals
+    double-counts. Free spot (total - hold) + accountValues does not.
+    """
+    perp_eq = float(post({"type": "clearinghouseState", "user": addr})["marginSummary"]["accountValue"])
+    if dex:
+        perp_eq += float(post({"type": "clearinghouseState", "user": addr, "dex": dex})["marginSummary"]["accountValue"])
     spot = post({"type": "spotClearinghouseState", "user": addr})
     usdc = 0.0
     for b in spot.get("balances", []):
         if b["coin"] == "USDC":
-            usdc = float(b["total"])
+            usdc = float(b["total"]) - float(b.get("hold", 0))
             break
     return perp_eq + usdc
 
@@ -145,8 +157,8 @@ def main():
             return
 
         try:
-            state = fetch_current_state(addr)
-            equity = fetch_unified_equity(addr)
+            state = fetch_current_state(addr, dex=coin_dex(args.coin))
+            equity = fetch_unified_equity(addr, dex=coin_dex(args.coin))
             if starting_equity == 0:
                 starting_equity = equity
             our_pos = next((p for p in state.get("assetPositions", []) if p["position"]["coin"] == args.coin), None)
@@ -190,8 +202,7 @@ def main():
                     # cancel any quote still resting from a previous poll so
                     # maker orders re-price instead of stacking on the book
                     # (open orders are per-dex — must query the coin's dex)
-                    coin_dex = args.coin.split(":", 1)[0] if ":" in args.coin else ""
-                    for o in info.open_orders(addr, dex=coin_dex):
+                    for o in info.open_orders(addr, dex=coin_dex(args.coin)):
                         if o["coin"] == args.coin:
                             try:
                                 exch.cancel(args.coin, o["oid"])

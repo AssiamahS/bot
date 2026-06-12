@@ -1,5 +1,30 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-06-12 — v2.26.6 — bots were blind to their own positions (3rd per-dex bug)
+
+### Fixed
+- `fetch_current_state()` queried `clearinghouseState` without the `dex`
+  param — same per-dex trap as allMids (v2.26.3) and open_orders
+  (v2.26.4), but this one cost money: HIP-3 positions were invisible, so
+  `our_size` always read 0 and every poll with extreme funding opened
+  ANOTHER position. Overnight stack: TSLA 0.267 ($106 vs $15 intended),
+  MU $110 vs $20, ~$282 total notional (~3x) on $91 equity.
+- `fetch_unified_equity()` had two layered bugs: it missed the xyz dex
+  entirely, and the naive fix double-counts — spot `total` includes the
+  `hold` backing HIP-3 margin, and the dex accountValue is that same
+  margin ± uPnL. Correct formula: free spot (total − hold) + accountValue
+  per dex. Equity read $115.98 wrong vs $91.01 right.
+
+### Ops
+- Trimmed all four stacked positions back to configured size with
+  reduce-only IOC orders (TSLA 0.267→0.038, NVDA −0.148→−0.073,
+  MU −0.111→−0.021, SILVER 0.58→0.30). Notional $282→$70.
+- Net result of the whole episode: equity $89.57 → $91.53 (+$1.96) —
+  funding collection on the oversized shorts outran the trim costs.
+- TSLA open_long at 07:54 hit a read timeout (Errno read timed out) —
+  with position visibility fixed, a timed-out-but-accepted order can no
+  longer cause a double-open: the bot sees the position next poll.
+
 ## 2026-06-11 — v2.26.5 — Telegram alerts with underscores were dropped
 
 ### Fixed
