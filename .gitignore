@@ -16,3 +16,4 @@ trader_status.json
 venv/
 watchdog.jsonl
 .main_key
+autoresearch/mcp_secret.txt
