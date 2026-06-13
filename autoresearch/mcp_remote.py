@@ -186,18 +186,25 @@ class BypassOAuthProvider:
 
 _oauth = BypassOAuthProvider()
 
+# streamable_http_path is relative ("/mcp") — the outer Starlette mount at
+# /{SECRET} promotes every route to /{SECRET}/mcp, /{SECRET}/.well-known/...,
+# /{SECRET}/register, etc., keeping them all away from the Cloudflare-blocked
+# root /.well-known/ paths.
 mcp = FastMCP(
     "hl-bot-remote",
     host="127.0.0.1",
     port=PORT,
-    streamable_http_path=f"/{SECRET}/mcp",
-    # quick-tunnel hostname changes on every restart; secret path is the gate,
-    # server binds loopback only
+    streamable_http_path="/mcp",
+    # quick-tunnel hostname rotates; rebinding check off, secret path is the gate
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     auth_server_provider=_oauth,
     auth=AuthSettings(
-        issuer_url=AnyHttpUrl(TUNNEL_URL),
-        resource_server_url=AnyHttpUrl(f"{TUNNEL_URL}/{SECRET}/mcp"),
+        # issuer has a path component so /.well-known/oauth-authorization-server
+        # lands at /{SECRET}/.well-known/... not at root
+        issuer_url=AnyHttpUrl(f"{TUNNEL_URL}/{SECRET}"),
+        # None = skip creating the RFC 9728 protected-resource metadata endpoint,
+        # which would otherwise be placed at root /.well-known/ (also blocked)
+        resource_server_url=None,
         client_registration_options=ClientRegistrationOptions(enabled=True),
     ),
 )
@@ -347,4 +354,13 @@ def perf_journal(coin: str = "", events: int = 60) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    # Wrap the inner FastMCP app under /{SECRET} so every route — MCP endpoint,
+    # OAuth metadata, register, authorize, token — is served under the secret
+    # prefix and never at root /.well-known/ (blocked by Cloudflare quick tunnels).
+    inner = mcp.streamable_http_app()
+    app = Starlette(routes=[Mount(f"/{SECRET}", app=inner)])
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
