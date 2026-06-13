@@ -12,6 +12,11 @@ URL_FILE="$DIR/tunnel_url.txt"
 while IFS= read -r line; do
     printf '%s\n' "$line" >> "$LOG"
     if [[ "$line" =~ (https://[a-z0-9-]+\.trycloudflare\.com) ]]; then
-        printf '%s\n' "${BASH_REMATCH[1]}" > "$URL_FILE"
+        NEW="${BASH_REMATCH[1]}"
+        OLD="$(cat "$URL_FILE" 2>/dev/null | tr -d '[:space:]')"
+        # only write (and trigger WatchPaths restart) when URL actually changes
+        if [[ "$NEW" != "$OLD" ]]; then
+            printf '%s\n' "$NEW" > "$URL_FILE"
+        fi
     fi
 done

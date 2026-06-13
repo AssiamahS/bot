@@ -72,12 +72,17 @@ def _read_tunnel_url(max_wait: int = 60) -> str:
 TUNNEL_URL = _read_tunnel_url()
 
 
+_STATE_FILE = HERE / "mcp_oauth_state.json"
+
+
 class BypassOAuthProvider:
     """OAuth provider that auto-approves everything.
 
-    Real auth = secret URL path. OAuth is required by MCP spec 2025-03-26
-    for remote servers; this satisfies the protocol without adding a login wall.
-    All state is in-memory and resets on restart (clients must re-auth).
+    Real auth = secret URL path. OAuth satisfies the MCP spec 2025-03-26
+    requirement for remote servers without adding a login wall.
+
+    State is persisted to mcp_oauth_state.json so clients survive MCP server
+    restarts (which happen on tunnel URL rotation via WatchPaths).
     """
 
     def __init__(self):
@@ -85,12 +90,47 @@ class BypassOAuthProvider:
         self._codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not _STATE_FILE.exists():
+            return
+        try:
+            raw = json.loads(_STATE_FILE.read_text())
+            now = time.time()
+            self._clients = {
+                k: OAuthClientInformationFull.model_validate(v)
+                for k, v in raw.get("clients", {}).items()
+            }
+            self._access_tokens = {
+                k: AccessToken.model_validate(v)
+                for k, v in raw.get("access_tokens", {}).items()
+                if v.get("expires_at", now + 1) > now
+            }
+            self._refresh_tokens = {
+                k: RefreshToken.model_validate(v)
+                for k, v in raw.get("refresh_tokens", {}).items()
+                if v.get("expires_at", now + 1) > now
+            }
+        except Exception:
+            pass
+
+    def _save(self) -> None:
+        try:
+            _STATE_FILE.write_text(json.dumps({
+                "clients": {k: v.model_dump(mode="json") for k, v in self._clients.items()},
+                "access_tokens": {k: v.model_dump(mode="json") for k, v in self._access_tokens.items()},
+                "refresh_tokens": {k: v.model_dump(mode="json") for k, v in self._refresh_tokens.items()},
+            }, indent=2))
+        except Exception:
+            pass
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         self._clients[client_info.client_id] = client_info
+        self._save()
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         code = _secrets.token_urlsafe(32)
@@ -122,23 +162,16 @@ class BypassOAuthProvider:
         refresh = _secrets.token_urlsafe(32)
         expires = int(time.time()) + 3600
         self._access_tokens[access] = AccessToken(
-            token=access,
-            client_id=client.client_id,
-            scopes=authorization_code.scopes,
-            expires_at=expires,
+            token=access, client_id=client.client_id,
+            scopes=authorization_code.scopes, expires_at=expires,
         )
         self._refresh_tokens[refresh] = RefreshToken(
-            token=refresh,
-            client_id=client.client_id,
-            scopes=authorization_code.scopes,
-            expires_at=expires + 86400,
+            token=refresh, client_id=client.client_id,
+            scopes=authorization_code.scopes, expires_at=expires + 86400,
         )
-        return OAuthToken(
-            access_token=access,
-            token_type="bearer",
-            expires_in=3600,
-            refresh_token=refresh,
-        )
+        self._save()
+        return OAuthToken(access_token=access, token_type="bearer",
+                          expires_in=3600, refresh_token=refresh)
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
@@ -159,23 +192,16 @@ class BypassOAuthProvider:
         new_refresh = _secrets.token_urlsafe(32)
         expires = int(time.time()) + 3600
         self._access_tokens[access] = AccessToken(
-            token=access,
-            client_id=client.client_id,
-            scopes=refresh_token.scopes,
-            expires_at=expires,
+            token=access, client_id=client.client_id,
+            scopes=refresh_token.scopes, expires_at=expires,
         )
         self._refresh_tokens[new_refresh] = RefreshToken(
-            token=new_refresh,
-            client_id=client.client_id,
-            scopes=refresh_token.scopes,
-            expires_at=expires + 86400,
+            token=new_refresh, client_id=client.client_id,
+            scopes=refresh_token.scopes, expires_at=expires + 86400,
         )
-        return OAuthToken(
-            access_token=access,
-            token_type="bearer",
-            expires_in=3600,
-            refresh_token=new_refresh,
-        )
+        self._save()
+        return OAuthToken(access_token=access, token_type="bearer",
+                          expires_in=3600, refresh_token=new_refresh)
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         t = self._access_tokens.get(token)
@@ -186,6 +212,7 @@ class BypassOAuthProvider:
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         self._access_tokens.pop(token.token, None)
         self._refresh_tokens.pop(token.token, None)
+        self._save()
 
 
 _oauth = BypassOAuthProvider()

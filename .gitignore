@@ -17,3 +17,4 @@ venv/
 watchdog.jsonl
 .main_key
 autoresearch/mcp_secret.txt
+mcp_oauth_state.json
