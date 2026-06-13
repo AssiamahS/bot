@@ -8,45 +8,198 @@ Read-only by design: status, logs, fills, funding. No order placement,
 no arbitrary file reads, no shell. Secrets in config.json (private key,
 telegram token) are never returned by any tool.
 
-Auth: the MCP endpoint lives under a random URL path (see SECRET below).
-Anyone without the full URL gets 404s from starlette routing.
+Auth: two layers —
+  1. The MCP endpoint lives under a random URL path (SECRET) → anyone
+     without the full URL gets 404s.
+  2. OAuth 2.0 PKCE flow (required by MCP spec 2025-03-26) implemented
+     as a bypass provider: registration and authorization are auto-approved,
+     no login screen. The issued bearer token is the second layer.
 """
 
 import json
 import re
+import secrets as _secrets
 import subprocess
 import time
 from pathlib import Path
 
 import requests
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationCode,
+    AuthorizationParams,
+    RefreshToken,
+    construct_redirect_uri,
+)
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from pydantic import AnyHttpUrl
 
 HERE = Path(__file__).resolve().parent
 LOG_DIR = HERE / "live_logs"
 CONFIG = HERE.parent / "config.json"
 API = "https://api.hyperliquid.xyz/info"
 
-# random path segment = the auth token, kept out of git (repo is public).
-# Rotate by deleting mcp_secret.txt, restarting, and updating the connector
-# URL in claude.ai.
+# random path segment = URL-based auth token, kept out of git (repo is public).
+# Rotate by deleting mcp_secret.txt, restarting, and updating the connector URL.
 _SECRET_FILE = HERE / "mcp_secret.txt"
 if not _SECRET_FILE.exists():
-    import secrets as _secrets
     _SECRET_FILE.write_text(_secrets.token_urlsafe(24))
 SECRET = _SECRET_FILE.read_text().strip()
 PORT = 8765
 
 COINS = ["xyz:SILVER", "xyz:MU", "xyz:NVDA", "xyz:AAPL", "xyz:TSLA"]
 
+
+def _read_tunnel_url(max_wait: int = 60) -> str:
+    """Read the cloudflared quick-tunnel URL from its log, retrying until available."""
+    log = LOG_DIR / "cloudflared.log"
+    for _ in range(max_wait):
+        if log.exists():
+            matches = re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", log.read_text())
+            if matches:
+                return matches[-1]
+        time.sleep(1)
+    raise RuntimeError(f"cloudflared tunnel URL not found in {log} after {max_wait}s")
+
+
+TUNNEL_URL = _read_tunnel_url()
+
+
+class BypassOAuthProvider:
+    """OAuth provider that auto-approves everything.
+
+    Real auth = secret URL path. OAuth is required by MCP spec 2025-03-26
+    for remote servers; this satisfies the protocol without adding a login wall.
+    All state is in-memory and resets on restart (clients must re-auth).
+    """
+
+    def __init__(self):
+        self._clients: dict[str, OAuthClientInformationFull] = {}
+        self._codes: dict[str, AuthorizationCode] = {}
+        self._access_tokens: dict[str, AccessToken] = {}
+        self._refresh_tokens: dict[str, RefreshToken] = {}
+
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        return self._clients.get(client_id)
+
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        self._clients[client_info.client_id] = client_info
+
+    async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        code = _secrets.token_urlsafe(32)
+        self._codes[code] = AuthorizationCode(
+            code=code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + 300,
+            client_id=client.client_id,
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+        )
+        return construct_redirect_uri(str(params.redirect_uri), code=code, state=params.state)
+
+    async def load_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: str
+    ) -> AuthorizationCode | None:
+        code = self._codes.get(authorization_code)
+        if code and code.client_id == client.client_id:
+            return code
+        return None
+
+    async def exchange_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
+    ) -> OAuthToken:
+        self._codes.pop(authorization_code.code, None)
+        access = _secrets.token_urlsafe(32)
+        refresh = _secrets.token_urlsafe(32)
+        expires = int(time.time()) + 3600
+        self._access_tokens[access] = AccessToken(
+            token=access,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=expires,
+        )
+        self._refresh_tokens[refresh] = RefreshToken(
+            token=refresh,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=expires + 86400,
+        )
+        return OAuthToken(
+            access_token=access,
+            token_type="bearer",
+            expires_in=3600,
+            refresh_token=refresh,
+        )
+
+    async def load_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: str
+    ) -> RefreshToken | None:
+        rt = self._refresh_tokens.get(refresh_token)
+        if rt and rt.client_id == client.client_id:
+            return rt
+        return None
+
+    async def exchange_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshToken,
+        scopes: list[str],
+    ) -> OAuthToken:
+        self._refresh_tokens.pop(refresh_token.token, None)
+        access = _secrets.token_urlsafe(32)
+        new_refresh = _secrets.token_urlsafe(32)
+        expires = int(time.time()) + 3600
+        self._access_tokens[access] = AccessToken(
+            token=access,
+            client_id=client.client_id,
+            scopes=refresh_token.scopes,
+            expires_at=expires,
+        )
+        self._refresh_tokens[new_refresh] = RefreshToken(
+            token=new_refresh,
+            client_id=client.client_id,
+            scopes=refresh_token.scopes,
+            expires_at=expires + 86400,
+        )
+        return OAuthToken(
+            access_token=access,
+            token_type="bearer",
+            expires_in=3600,
+            refresh_token=new_refresh,
+        )
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        t = self._access_tokens.get(token)
+        if t and (t.expires_at is None or t.expires_at > time.time()):
+            return t
+        return None
+
+    async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
+        self._access_tokens.pop(token.token, None)
+        self._refresh_tokens.pop(token.token, None)
+
+
+_oauth = BypassOAuthProvider()
+
 mcp = FastMCP(
     "hl-bot-remote",
     host="127.0.0.1",
     port=PORT,
     streamable_http_path=f"/{SECRET}/mcp",
-    # quick-tunnel hostname changes on every restart and allowed_hosts has no
-    # subdomain wildcard; the secret path is the gate, server binds loopback
+    # quick-tunnel hostname changes on every restart; secret path is the gate,
+    # server binds loopback only
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    auth_server_provider=_oauth,
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl(TUNNEL_URL),
+        resource_server_url=AnyHttpUrl(f"{TUNNEL_URL}/{SECRET}/mcp"),
+        client_registration_options=ClientRegistrationOptions(enabled=True),
+    ),
 )
 
 
