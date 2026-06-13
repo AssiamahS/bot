@@ -54,15 +54,19 @@ COINS = ["xyz:SILVER", "xyz:MU", "xyz:NVDA", "xyz:AAPL", "xyz:TSLA"]
 
 
 def _read_tunnel_url(max_wait: int = 60) -> str:
-    """Read the cloudflared quick-tunnel URL from its log, retrying until available."""
-    log = LOG_DIR / "cloudflared.log"
+    """Read the cloudflared quick-tunnel URL from tunnel_url.txt, retrying until available.
+
+    hl_tunnel_wrapper.sh writes the URL the moment cloudflared logs it, so this
+    file is always a clean single-line value rather than a grepped log.
+    """
+    url_file = HERE / "tunnel_url.txt"
     for _ in range(max_wait):
-        if log.exists():
-            matches = re.findall(r"https://[a-z0-9-]+\.trycloudflare\.com", log.read_text())
-            if matches:
-                return matches[-1]
+        if url_file.exists():
+            url = url_file.read_text().strip()
+            if url.startswith("https://"):
+                return url
         time.sleep(1)
-    raise RuntimeError(f"cloudflared tunnel URL not found in {log} after {max_wait}s")
+    raise RuntimeError(f"tunnel URL not found in {url_file} after {max_wait}s")
 
 
 TUNNEL_URL = _read_tunnel_url()
