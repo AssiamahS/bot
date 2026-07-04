@@ -8,7 +8,7 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.26.6` |
+| **Version tag** | `v2.27.0` |
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
 | **HIP-3 funding harvester** | LIVE AND TRADING. v2.26.3 fixed order placement (allMids/Exchange missing dex); v2.26.4 resting quotes + cancel-before-requote; v2.26.5 TG alert drops; v2.26.6 position blindness (clearinghouseState needs dex= — bots stacked to $282 notional overnight before the fix; trimmed back to per-market targets 2026-06-12). EVERYTHING in the info API is per-dex — pass dex= or HIP-3 data is silently missing. 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. |
@@ -16,7 +16,8 @@
 | **Agent wallet** | Rotated 2026-06-10: old `0xa669…` expired ("User or API Wallet does not exist"). New agent `0x5889…F646` (`kimbot2026`) approved via Keychain main key. |
 | **Profitable?** | Early signs OK: $89.57 → $91.53 (+$1.96) over first ~22h of live trading, including the cost of trimming the stacked positions. Funding harvesting works; needs a longer sample. |
 | **Slywatch** | INACTIVE (was on dead VPS). Manual commits + tag + push to `bot` remote. |
-| **Last updated** | 2026-06-11 |
+| **Polymarket BTC 5m leg** | BUILT + dry-run verified 2026-07-04, NOT live. `polymarket/` — buys the leading side of `btc-updown-5m-*` rounds near close (ask ≥ 0.70), SL 25%, exits ~20s before settle. Start: `polymarket/skills/5min-btc-polymarket/scripts/btc5m_ctl.sh start --profile conservative --dry-run`. Going live needs PM_PRIVATE_KEY/PM_FUNDER in `polymarket/pm-hl-conservative-plus-repo/.env` + USDC deposited into Polymarket on Polygon. No Polymarket creds exist on this machine yet (polymarket-trade MCP still has REPLACE_ placeholders). |
+| **Last updated** | 2026-07-04 |
 
 ## Rescue Actions Required (2026-04-23)
 

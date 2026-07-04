@@ -1,5 +1,38 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-07-04 — v2.27.0 — new Polymarket BTC 5m up/down leg (vendored, dry-run only)
+
+### Added
+- `polymarket/` — momentum-into-close strategy for Polymarket `btc-updown-5m-*`
+  rounds: in the last minutes of each 5m round, buy the leading side when its
+  CLOB ask ≥ threshold (0.70 default), stop-loss 25%, exit ~20s before close.
+  Uses Hyperliquid candles as the BTC momentum oracle.
+  - vendored `Novals83/5min-btc-polymarket` @1c9aa81 (skill + control scripts)
+    and `Novals83/polymarket-hl-strategy` @33c3125 (execution engine, dir
+    renamed `pm-hl-conservative-plus-repo` — the path the skill hardcodes).
+  - audited both before vendoring: network surface is gamma-api/clob
+    polymarket.com + api.hyperliquid.xyz/info only; the private key never
+    leaves the official py-clob-client. No exfil, no obfuscation.
+
+### Fixed
+- `btc5m_ctl.sh` gained `--dry-run` — upstream hardcodes `--execute` on start.
+- exec runner gained `--force-side` — the public repo cut lacks it but the
+  skill passes it on every open, so every open would have died on argparse.
+- venv (py3.13): `setuptools<81` (eth-abi imports pkg_resources, removed in
+  setuptools 82) and `eth-abi>=5.1` + `parsimonious>=0.10` (default resolve
+  gives eth-abi 4.0.0b2 → parsimonious 0.8.1 → `inspect.getargspec`, gone
+  since py3.11).
+
+### Ops
+- dry-run verified against live rounds (Jul 4 5:55–6:05AM ET buckets): market
+  resolution, CLOB book reads, 60s entry guard, side pick, delegation to exec
+  runner with entry filters passing. No orders placed.
+- NOT live: needs Polymarket creds in
+  `polymarket/pm-hl-conservative-plus-repo/.env` (PM_PRIVATE_KEY + PM_FUNDER,
+  USDC deposited on Polygon). `.env`/`.venv`/runtime are gitignored.
+- source: viral @igus_ai tweet claiming $200→$13k — treat as marketing; the
+  code buys favorites at 0.70–0.99 where one loss erases several wins.
+
 ## 2026-06-12 — v2.26.6 — bots were blind to their own positions (3rd per-dex bug)
 
 ### Fixed
