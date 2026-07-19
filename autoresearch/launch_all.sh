@@ -39,10 +39,27 @@ run_bot "xyz:NVDA" 15 90
 run_bot "xyz:AAPL" 15 135
 run_bot "xyz:TSLA" 15 180
 
+# delta-neutral spot+perp harvester (main dex). --live is safe at any balance:
+# it refuses entries below --min-equity and HL's $10/leg minimum, so on an
+# unfunded account it just scans and logs.
+if ! pgrep -f "live_delta_neutral.py" > /dev/null; then
+  (
+    sleep 225
+    restart=$((60 + RANDOM % 120))
+    while true; do
+      echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) starting delta-neutral ===" >> live_logs/dn_runner.log
+      python3 -u live_delta_neutral.py --live --usd 20 --poll-secs 600 >> live_logs/dn_runner.log 2>&1
+      echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) delta-neutral exited, restart in ${restart}s ===" >> live_logs/dn_runner.log
+      sleep "$restart"
+      restart=$((60 + RANDOM % 120))
+    done
+  ) &
+fi
+
 sleep 3
 echo ""
 echo "running live_funding processes:"
-pgrep -afl "live_funding.py" | head -20
+pgrep -afl "live_funding.py|live_delta_neutral.py" | head -20
 
 # stay foreground: launchd KeepAlive treats exit as death and kills the whole
 # process group, which murders every bot ~10s after launch. wait forever instead.

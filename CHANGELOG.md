@@ -1,5 +1,39 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-07-19 — v2.28.0 — delta-neutral spot+perp funding harvester
+
+### Added
+- `autoresearch/live_delta_neutral.py` — long spot + short perp on the same
+  main-dex asset, so price exposure nets to ~zero and income is funding minus
+  fees. Replaces directional risk with basis risk. Only positive funding is
+  harvestable (spot can't be shorted).
+  - persistence gate: enters only when every hourly funding print over the
+    last 24h is positive AND net APR (funding minus amortized 4-leg taker
+    fees) clears 10%, both over the window and over the last 3h. One-poll
+    spikes never trigger an entry.
+  - startup reconciliation: adopts hedged pairs already on the exchange,
+    alerts + flattens naked perp legs (a crash between legs must not leave a
+    directional position running silently). Sub-$10 dust is ignored — it
+    can't be closed under HL's order minimum and isn't a real risk.
+  - exit when trailing 6h net APR decays below 2%.
+  - live entries additionally require equity >= $25 and $10/leg (HL minimum),
+    so `--live` is safe on an unfunded account: it scans and logs only.
+  - shares RiskManager kill switch (`live_logs/KILLED`) and daily-loss cap
+    with the HIP-3 harvesters.
+- `launch_all.sh` runs it under the same auto-restart loop as the HIP-3 bots
+  (225s stagger, de-correlated restart delays).
+
+### Ops
+- verified live in dry-run: 8 hedgeable spot+perp assets discovered
+  (AZTEC, BERA, HYPE, MON, PUMP, PURR, STABLE, TRUMP...), scan ranked PURR
+  top at +1.6% net APR — correctly below the gate, so it stayed flat.
+  Current main-dex funding does not clear fees; the bot waits.
+- context: research sweep (X/Reddit/GitHub) — delta-neutral funding capture
+  is the only "hard to lose" pattern with evidence behind it; a published
+  retail study of cross-exchange funding arb showed 0/126 profitable events
+  after fees, so same-venue spot+perp (one exchange, no transfer risk) is
+  the variant worth running.
+
 ## 2026-07-04 — v2.27.0 — new Polymarket BTC 5m up/down leg (vendored, dry-run only)
 
 ### Added

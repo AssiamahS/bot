@@ -8,16 +8,17 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.27.0` |
+| **Version tag** | `v2.28.0` |
+| **Delta-neutral harvester** | LIVE (armed, flat) since 2026-07-19. `autoresearch/live_delta_neutral.py` — long spot + short perp same main-dex asset, income = funding − fees, ~zero price risk. Entry gate: 24h of positive funding AND >10% net APR after fees; exit <2% trailing 6h. 8 hedgeable assets found; top (PURR +1.6%) below gate → correctly flat. Live entries blocked until equity ≥ $25 (account holds $1 — see Portfolio). |
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
 | **HIP-3 funding harvester** | LIVE AND TRADING. v2.26.3 fixed order placement (allMids/Exchange missing dex); v2.26.4 resting quotes + cancel-before-requote; v2.26.5 TG alert drops; v2.26.6 position blindness (clearinghouseState needs dex= — bots stacked to $282 notional overnight before the fix; trimmed back to per-market targets 2026-06-12). EVERYTHING in the info API is per-dex — pass dex= or HIP-3 data is silently missing. 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. |
-| **Portfolio** | ~$91.5 unified equity (spot USDC free + xyz margin) + $4.05 Arbitrum. UNIFIED account — spot doubles as perps margin. Equity formula: free spot (total − hold) + accountValue per dex, never spot total + dex AV (double-counts). |
+| **Portfolio** | ~$1.00 unified equity + $0.43 Arbitrum. User withdrew $86.39 to own MetaMask 2026-06-22 08:40 via `scripts/withdraw.py` (on-chain ledger confirms). Bots run but can't open new positions until refunded (~$75–100 to `0x2538…C5aE` on Arbitrum USDC restores full size). UNIFIED account — spot doubles as perps margin. Equity formula: free spot (total − hold) + accountValue per dex, never spot total + dex AV (double-counts). |
 | **Agent wallet** | Rotated 2026-06-10: old `0xa669…` expired ("User or API Wallet does not exist"). New agent `0x5889…F646` (`kimbot2026`) approved via Keychain main key. |
 | **Profitable?** | Early signs OK: $89.57 → $91.53 (+$1.96) over first ~22h of live trading, including the cost of trimming the stacked positions. Funding harvesting works; needs a longer sample. |
 | **Slywatch** | INACTIVE (was on dead VPS). Manual commits + tag + push to `bot` remote. |
 | **Polymarket BTC 5m leg** | BUILT + dry-run verified 2026-07-04, NOT live. `polymarket/` — buys the leading side of `btc-updown-5m-*` rounds near close (ask ≥ 0.70), SL 25%, exits ~20s before settle. Start: `polymarket/skills/5min-btc-polymarket/scripts/btc5m_ctl.sh start --profile conservative --dry-run`. Going live needs PM_PRIVATE_KEY/PM_FUNDER in `polymarket/pm-hl-conservative-plus-repo/.env` + USDC deposited into Polymarket on Polygon. No Polymarket creds exist on this machine yet (polymarket-trade MCP still has REPLACE_ placeholders). |
-| **Last updated** | 2026-07-04 |
+| **Last updated** | 2026-07-19 |
 
 ## Rescue Actions Required (2026-04-23)
 
