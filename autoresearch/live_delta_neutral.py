@@ -316,10 +316,13 @@ class Runner:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--usd", type=float, default=20.0, help="notional per leg")
-    p.add_argument("--min-apr", type=float, default=0.10, help="entry gate: net APR after fees")
+    # defaults from dn_backtest.py 90d sweep: 5%/0.5% nets ~+13.4% APY with 22
+    # round trips; tighter gates (10%/2%) churn — fees turn the same funding
+    # stream into -20% APY. The surface is flat 3-7% so this isn't overfit.
+    p.add_argument("--min-apr", type=float, default=0.05, help="entry gate: net APR after fees")
     p.add_argument("--gate-hours", type=int, default=24, help="funding must persist this long")
     p.add_argument("--exit-hours", type=int, default=6, help="exit window for decay check")
-    p.add_argument("--exit-apr", type=float, default=0.02, help="exit when net APR drops below")
+    p.add_argument("--exit-apr", type=float, default=0.005, help="exit when net APR drops below")
     p.add_argument("--min-equity", type=float, default=25.0, help="no live entries below this")
     p.add_argument("--poll-secs", type=int, default=600)
     p.add_argument("--max-daily-loss-pct", type=float, default=3.0)

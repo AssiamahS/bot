@@ -8,8 +8,8 @@
 | Field | Value |
 |---|---|
 | **Active branch** | `feat/funding-scanner` |
-| **Version tag** | `v2.28.0` |
-| **Delta-neutral harvester** | LIVE (armed, flat) since 2026-07-19. `autoresearch/live_delta_neutral.py` — long spot + short perp same main-dex asset, income = funding − fees, ~zero price risk. Entry gate: 24h of positive funding AND >10% net APR after fees; exit <2% trailing 6h. 8 hedgeable assets found; top (PURR +1.6%) below gate → correctly flat. Live entries blocked until equity ≥ $25 (account holds $1 — see Portfolio). |
+| **Version tag** | `v2.28.1` |
+| **Delta-neutral harvester** | LIVE (armed, flat) since 2026-07-19. `autoresearch/live_delta_neutral.py` — long spot + short perp same main-dex asset, income = funding − fees, ~zero price risk. Gate retuned from `dn_backtest.py` 90d evidence: entry 24h positive funding AND >5% net APR, exit <0.5% trailing 6h → backtests ~+13.4% APY (old 10%/2% gate churned to −20.6%). PURR is the workhorse. 8 hedgeable assets. Live entries blocked until equity ≥ $25 (account holds $1 — see Portfolio). |
 | **Running on** | LOCAL Mac via launchd `com.kim.bots` (VPS 44.205.58.31 unreachable — AWS billing). |
 | **MM leg (trader.py)** | STOPPED since Apr 23. Strategy retired: 7W/24L round-trips, fees 3798× gross edge. Do not restart as-is. |
 | **HIP-3 funding harvester** | LIVE AND TRADING. v2.26.3 fixed order placement (allMids/Exchange missing dex); v2.26.4 resting quotes + cancel-before-requote; v2.26.5 TG alert drops; v2.26.6 position blindness (clearinghouseState needs dex= — bots stacked to $282 notional overnight before the fix; trimmed back to per-market targets 2026-06-12). EVERYTHING in the info API is per-dex — pass dex= or HIP-3 data is silently missing. 5 markets: xyz:SILVER/MU/NVDA/AAPL/TSLA, $15–20 each, maker, 600s poll. |

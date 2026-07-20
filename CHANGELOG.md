@@ -1,5 +1,26 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-07-19 — v2.28.1 — dn gate retuned from backtest evidence: looser wins
+
+### Added
+- `autoresearch/dn_backtest.py` — replays the exact dn gate/exit rules over
+  real hourly funding history (paginated fundingHistory) for every hedgeable
+  asset. Delta-neutral means no price data needed: P&L = funding − fee drag.
+
+### Changed
+- dn gate defaults: `--min-apr` 0.10 → 0.05, `--exit-apr` 0.02 → 0.005.
+  90d sweep across all 8 assets, one-position-at-a-time per $100:
+  - 5%/0.5%: **+3.30% / 90d (~+13.4% APY)**, 22 round trips
+  - 10%/2% (old default): **-5.07% / 90d (~-20.6% APY)**, 51 round trips
+  - surface is flat from 3-7% gate (+11 to +13.4% APY) → robust, not overfit
+  Lesson: in a fee-dominated trade, churn is the enemy — the tight gate
+  re-entered PURR 35 times paying 0.18% each trip; the loose gate held
+  through wobbles and kept the funding. PURR is the workhorse asset
+  (+2.5% of the +3.3%).
+
+### Ops
+- launchd restarted with the tuned defaults.
+
 ## 2026-07-19 — v2.28.0 — delta-neutral spot+perp funding harvester
 
 ### Added

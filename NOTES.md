@@ -28,3 +28,4 @@ non-obvious fix. Outcome-first, plain language.
 - Run codehawk (`review_diff`) before committing.
 - Read `STATUS.md` before changing bot behavior.
 - 2026-07-04: py-clob-client venv on py3.13 needs two fixes on top of `pip install -r requirements.txt`: `setuptools<81` (eth-abi 4.0.0b2 imports pkg_resources, deleted in setuptools 82) and `eth-abi>=5.1 parsimonious>=0.10` (the default resolve lands parsimonious 0.8.1 whose inspect.getargspec died in py3.11). Also: public Novals83/polymarket-hl-strategy is an older cut than the pm-hl-conservative-plus-repo its own skill targets — --force-side had to be re-added or every open dies on argparse.
+- 2026-07-19: spotMeta universe references tokens by their "index" FIELD, not list position — tokens[base] by list index crashes with IndexError; build {t['index']: t} first. Same per-dex trap family as clearinghouseState.
