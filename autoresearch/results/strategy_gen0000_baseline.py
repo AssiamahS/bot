@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Trading strategy — THIS FILE IS EDITED BY THE AI AGENT.
-Baseline v2: EMA crossover + RSI + Choppiness Index filter.
+Improved v2 with added Bollinger Bands and adjusted entry conditions for BTC, ETH, SOL.
 """
 
 import numpy as np
@@ -20,28 +20,32 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 
-def choppiness_index(high, low, close, period=14):
-    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-    atr_sum = tr.rolling(period).sum()
-    high_max = high.rolling(period).max()
-    low_min = low.rolling(period).min()
-    return 100 * np.log10(atr_sum / (high_max - low_min + 1e-10)) / np.log10(period)
+def bollinger_bands(close, window=20, dev_multiple=2):
+    rolling_mean = close.rolling(window).mean()
+    rolling_std = close.rolling(window).std()
+    upper_band = rolling_mean + (rolling_std * dev_multiple)
+    lower_band = rolling_mean - (rolling_std * dev_multiple)
+    return upper_band, lower_band
 
 
 def generate_signals(df):
     close, high, low = df["close"], df["high"], df["low"]
 
-    fast = ema(close, 12)
-    slow = ema(close, 26)
+    # EMA crossovers with RSI filter
+    fast_ema = ema(close, 26)
+    slow_ema = ema(close, 50)
     rsi_val = rsi(close, 14)
-    chop = choppiness_index(high, low, close, 14)
 
     signals = pd.Series(0, index=df.index)
-    trending = chop < 55.0
+    
+    # Main crossover signal
+    up_trend = (fast_ema > slow_ema) & (rsi_val < 70)
+    down_trend = (fast_ema < slow_ema) & (rsi_val > 30)
 
-    long_cond = (fast > slow) & (fast.shift(1) <= slow.shift(1)) & trending & (rsi_val < 65)
-    short_cond = (fast < slow) & (fast.shift(1) >= slow.shift(1)) & trending & (rsi_val > 35)
+    # Bollinger Bands for additional filtering
+    upper_band, lower_band = bollinger_bands(close, window=20, dev_multiple=2)
+    
+    signals[up_trend] = 1  # Bullish EMA cross with RSI under 70
+    signals[down_trend & (close < lower_band)] = -1  # Bearish EMA cross AND price below BB lower band
 
-    signals[long_cond] = 1
-    signals[short_cond] = -1
     return signals

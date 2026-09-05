@@ -1,0 +1,1 @@
+{"ts": "2026-06-22T12:07:39+00:00", "equity": 88.51213815, "pos": 0.0, "fr": 6.25e-06, "hi": 6.25e-06, "lo": -1.08559e-05, "apy_now": 5.475, "decision": "open_short", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 476004107240}}]}}}}

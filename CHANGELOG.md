@@ -1,5 +1,633 @@
 # Changelog — Hyperliquid Market Maker Bot
 
+## 2026-07-19 — v2.28.1 — dn gate retuned from backtest evidence: looser wins
+
+### Added
+- `autoresearch/dn_backtest.py` — replays the exact dn gate/exit rules over
+  real hourly funding history (paginated fundingHistory) for every hedgeable
+  asset. Delta-neutral means no price data needed: P&L = funding − fee drag.
+
+### Changed
+- dn gate defaults: `--min-apr` 0.10 → 0.05, `--exit-apr` 0.02 → 0.005.
+  90d sweep across all 8 assets, one-position-at-a-time per $100:
+  - 5%/0.5%: **+3.30% / 90d (~+13.4% APY)**, 22 round trips
+  - 10%/2% (old default): **-5.07% / 90d (~-20.6% APY)**, 51 round trips
+  - surface is flat from 3-7% gate (+11 to +13.4% APY) → robust, not overfit
+  Lesson: in a fee-dominated trade, churn is the enemy — the tight gate
+  re-entered PURR 35 times paying 0.18% each trip; the loose gate held
+  through wobbles and kept the funding. PURR is the workhorse asset
+  (+2.5% of the +3.3%).
+
+### Ops
+- launchd restarted with the tuned defaults.
+
+## 2026-07-19 — v2.28.0 — delta-neutral spot+perp funding harvester
+
+### Added
+- `autoresearch/live_delta_neutral.py` — long spot + short perp on the same
+  main-dex asset, so price exposure nets to ~zero and income is funding minus
+  fees. Replaces directional risk with basis risk. Only positive funding is
+  harvestable (spot can't be shorted).
+  - persistence gate: enters only when every hourly funding print over the
+    last 24h is positive AND net APR (funding minus amortized 4-leg taker
+    fees) clears 10%, both over the window and over the last 3h. One-poll
+    spikes never trigger an entry.
+  - startup reconciliation: adopts hedged pairs already on the exchange,
+    alerts + flattens naked perp legs (a crash between legs must not leave a
+    directional position running silently). Sub-$10 dust is ignored — it
+    can't be closed under HL's order minimum and isn't a real risk.
+  - exit when trailing 6h net APR decays below 2%.
+  - live entries additionally require equity >= $25 and $10/leg (HL minimum),
+    so `--live` is safe on an unfunded account: it scans and logs only.
+  - shares RiskManager kill switch (`live_logs/KILLED`) and daily-loss cap
+    with the HIP-3 harvesters.
+- `launch_all.sh` runs it under the same auto-restart loop as the HIP-3 bots
+  (225s stagger, de-correlated restart delays).
+
+### Ops
+- verified live in dry-run: 8 hedgeable spot+perp assets discovered
+  (AZTEC, BERA, HYPE, MON, PUMP, PURR, STABLE, TRUMP...), scan ranked PURR
+  top at +1.6% net APR — correctly below the gate, so it stayed flat.
+  Current main-dex funding does not clear fees; the bot waits.
+- context: research sweep (X/Reddit/GitHub) — delta-neutral funding capture
+  is the only "hard to lose" pattern with evidence behind it; a published
+  retail study of cross-exchange funding arb showed 0/126 profitable events
+  after fees, so same-venue spot+perp (one exchange, no transfer risk) is
+  the variant worth running.
+
+## 2026-07-04 — v2.27.0 — new Polymarket BTC 5m up/down leg (vendored, dry-run only)
+
+### Added
+- `polymarket/` — momentum-into-close strategy for Polymarket `btc-updown-5m-*`
+  rounds: in the last minutes of each 5m round, buy the leading side when its
+  CLOB ask ≥ threshold (0.70 default), stop-loss 25%, exit ~20s before close.
+  Uses Hyperliquid candles as the BTC momentum oracle.
+  - vendored `Novals83/5min-btc-polymarket` @1c9aa81 (skill + control scripts)
+    and `Novals83/polymarket-hl-strategy` @33c3125 (execution engine, dir
+    renamed `pm-hl-conservative-plus-repo` — the path the skill hardcodes).
+  - audited both before vendoring: network surface is gamma-api/clob
+    polymarket.com + api.hyperliquid.xyz/info only; the private key never
+    leaves the official py-clob-client. No exfil, no obfuscation.
+
+### Fixed
+- `btc5m_ctl.sh` gained `--dry-run` — upstream hardcodes `--execute` on start.
+- exec runner gained `--force-side` — the public repo cut lacks it but the
+  skill passes it on every open, so every open would have died on argparse.
+- venv (py3.13): `setuptools<81` (eth-abi imports pkg_resources, removed in
+  setuptools 82) and `eth-abi>=5.1` + `parsimonious>=0.10` (default resolve
+  gives eth-abi 4.0.0b2 → parsimonious 0.8.1 → `inspect.getargspec`, gone
+  since py3.11).
+
+### Ops
+- dry-run verified against live rounds (Jul 4 5:55–6:05AM ET buckets): market
+  resolution, CLOB book reads, 60s entry guard, side pick, delegation to exec
+  runner with entry filters passing. No orders placed.
+- NOT live: needs Polymarket creds in
+  `polymarket/pm-hl-conservative-plus-repo/.env` (PM_PRIVATE_KEY + PM_FUNDER,
+  USDC deposited on Polygon). `.env`/`.venv`/runtime are gitignored.
+- source: viral @igus_ai tweet claiming $200→$13k — treat as marketing; the
+  code buys favorites at 0.70–0.99 where one loss erases several wins.
+
+## 2026-06-12 — v2.26.6 — bots were blind to their own positions (3rd per-dex bug)
+
+### Fixed
+- `fetch_current_state()` queried `clearinghouseState` without the `dex`
+  param — same per-dex trap as allMids (v2.26.3) and open_orders
+  (v2.26.4), but this one cost money: HIP-3 positions were invisible, so
+  `our_size` always read 0 and every poll with extreme funding opened
+  ANOTHER position. Overnight stack: TSLA 0.267 ($106 vs $15 intended),
+  MU $110 vs $20, ~$282 total notional (~3x) on $91 equity.
+- `fetch_unified_equity()` had two layered bugs: it missed the xyz dex
+  entirely, and the naive fix double-counts — spot `total` includes the
+  `hold` backing HIP-3 margin, and the dex accountValue is that same
+  margin ± uPnL. Correct formula: free spot (total − hold) + accountValue
+  per dex. Equity read $115.98 wrong vs $91.01 right.
+
+### Ops
+- Trimmed all four stacked positions back to configured size with
+  reduce-only IOC orders (TSLA 0.267→0.038, NVDA −0.148→−0.073,
+  MU −0.111→−0.021, SILVER 0.58→0.30). Notional $282→$70.
+- Net result of the whole episode: equity $89.57 → $91.53 (+$1.96) —
+  funding collection on the oversized shorts outran the trim costs.
+- TSLA open_long at 07:54 hit a read timeout (Errno read timed out) —
+  with position visibility fixed, a timed-out-but-accepted order can no
+  longer cause a double-open: the bot sees the position next poll.
+
+## 2026-06-11 — v2.26.5 — Telegram alerts with underscores were dropped
+
+### Fixed
+- `notify.py` sends with `parse_mode: Markdown`; any message with an
+  unbalanced `_` or `*` — like every `open_short` / `close_short` alert —
+  got HTTP 400'd by Telegram and silently dropped. Now retries once as
+  plain text before giving up. Verified live ("sent" with an
+  `open_short` payload).
+- v2.26.4 cancel/re-quote path also verified live this cycle: NVDA bot
+  cancelled stale oid 465614381803, re-quoted at the fresh mid
+  ($203.45 → $203.14), new order resting as oid 465617141291.
+
+## 2026-06-11 — v2.26.4 — maker quotes treated as errors + order stacking
+
+First live order since April went out at 10:07 UTC (open_short 0.074
+xyz:NVDA @ 203.45, funding apy +29.5%) and the exchange accepted it
+resting — proving the v2.26.3 dex fixes end-to-end.
+
+### Fixed
+- `live_funding.py` only recognised `filled` in the order response, so a
+  post-only (Alo) quote resting on the book — the *normal* maker outcome
+  — was logged as `❌ order error`. Now handled as its own ⏳ case.
+- Order stacking: an unfilled resting quote + unchanged signal meant a
+  new order every poll (600s), each one stacking on the book. A price
+  sweep could have filled several at once (2–3× intended size). Now any
+  open order on the coin is cancelled before re-quoting, which also
+  re-prices stale quotes at the fresh mid.
+- Gotcha found while testing: `info.open_orders()` is **per-dex** —
+  without `dex="xyz"` it returns `[]` even when an xyz order is resting.
+  The cancel loop passes the coin's dex.
+
+### Ops notes
+- Intermittent local DNS failures (Errno 8, ~1 per few polls across the
+  fleet) — loop catches them, skips the poll, retries in 600s. Benign
+  unless the rate climbs.
+
+## 2026-06-11 — v2.26.3 — funding bots couldn't see or trade HIP-3 markets
+
+### Fixed
+- `autoresearch/live_funding.py` `fetch_mid()` called `allMids` without
+  the `dex` param. Builder-deployed (HIP-3) markets like `xyz:SILVER`
+  only appear in `allMids` when the dex is named, so every open attempt
+  died with `no mid for xyz:SILVER`. SILVER had been signalling
+  open_short for hours (funding apy ~18%) and never got a position on.
+- Second, latent bug behind the first one: `Exchange`/`Info` were
+  constructed without `perp_dexs`, so the SDK never built the
+  name→asset-id map for the xyz dex (HIP-3 ids live at 110000+). Even
+  with a mid, `exch.order("xyz:SILVER", ...)` would have KeyError'd.
+  Now passes `perp_dexs=["", <dex>]` derived from the coin arg.
+- Verified live: mid resolves (SILVER $64.50) and all five coins map
+  (SILVER→110026, MU→110015, NVDA→110002, AAPL→110009, TSLA→110001).
+  Bots bounced via pkill; runner loops respawned them on the new code.
+
+### Ops notes
+- 26h of clean uptime confirms the v2.26.2 launchd fix holds.
+- Perps account value reads $0 — that's expected, account is unified
+  (spot USDC doubles as margin). No transfer needed or possible.
+
+## 2026-06-09 — v2.26.2 — launchd was killing the funding bots every 10s
+
+### Fixed
+- `autoresearch/launch_all.sh` exited after spawning the per-coin runner
+  subshells (`disown` + script end). Under the `com.kim.bots` launchd job
+  with `KeepAlive=true`, the job "dying" made launchd reap the whole
+  process group — every `live_funding.py` got killed ~10s after start,
+  then the cycle repeated. Bots had been crash-looping since Jun 9 02:48
+  with zero fills; logs were empty because buffered stdout died with the
+  process.
+- Fix: drop `disown`, add `wait` at the end so the supervisor stays
+  foreground for launchd; run python with `-u` so log lines flush
+  immediately.
+- Also first commit of `launch_all.sh` itself (was untracked).
+
+### Ops notes
+- VPS 44.205.58.31 unreachable (AWS billing) — bots now run locally via
+  `~/Library/LaunchAgents/com.kim.bots.plist`.
+- Perps margin was $0 since the Apr 23 wind-down; funded spot→perps via
+  `usd_class_transfer` signed with the Keychain main key (agent key
+  can't move funds).
+
+## 2026-04-23 — v2.26.0 — Keychain-stored main key → full money control
+
+### Added
+- `scripts/setup_main_key.py` — stores the HL main-wallet private key in
+  macOS Keychain (service `hyperliquid-sol-main`, account = wallet addr).
+  Validates that the key derives to the address in `config.json` before
+  storing — rejects wrong keys with a loud error. Interactive,
+  getpass-hidden input, one-time setup. Supports `--verify` and
+  `--rotate`.
+- `strategies/margin_helper.py` now reads the main key from Keychain
+  first (preferred, encrypted at rest) and falls back to the plaintext
+  `.main_key` file if Keychain returns nothing. Existing code paths
+  automatically get the upgrade.
+
+### Why
+User wants code-level control of the money — transfers, vault deposits,
+withdraws — without hitting MetaMask every time. The HL architecture
+requires the main wallet key for these ops; the agent key in
+`config.json` can only trade. Keychain storage is the right compromise:
+encrypted at rest (tied to macOS login), invisible to `cat`, can't be
+extracted without user password, survives reboots. Full automation with
+a real security boundary.
+
+### Next step for the user
+```
+python3 scripts/setup_main_key.py
+```
+One prompt, paste the MetaMask main-wallet private key, done forever.
+
+## 2026-04-23 — v2.25.0 — HIP-3 Exchange-meta fix + --no-transfer mode
+
+### Fixed
+- `scripts/hip3_funding.py` was crashing on every HIP-3 order with
+  `KeyError: 'xyz:COST'` because the default HL SDK Exchange object
+  only loads meta for the main perp dex. HIP-3 coin names live in a
+  separate universe. Now we spin up a second Exchange instance with
+  `dex="xyz"` meta and route all HIP-3 order/leverage calls through
+  it. Main-dex perps (BTC/ETH/SOL/...) still use the default instance.
+- Same applies to `update_leverage` on HIP-3 coins — same fix.
+
+### Added
+- `--no-transfer` flag on `hip3_funding.py` — skips margin_helper
+  entirely and sizes positions from whatever is already on perps.
+  For cases where the user can't/won't do a spot→perps transfer.
+- `--leverage N` flag — pass 5 or 10 to use higher leverage when
+  margin is limited. Default stays at 1x for HODL-like risk profile.
+
+### Discovered
+- First --live run with --no-transfer failed silently because WLD's
+  existing 10× position consumes 100% of the $1.37 perps margin
+  ($13.67 notional × 1/10 = $1.37 margin used). No free margin left
+  for any new HIP-3 position. The submit succeeded at the SDK level
+  but HL's clearinghouse rejected it without raising a clean
+  exception.
+- Practical consequence: WLD is a strategic blocker, not just a
+  minor losing trade. Either close WLD (realize –$1.30, free $0.07)
+  or do the spot→perps transfer. Both require user wallet action.
+
+## 2026-04-23 — v2.24.0 — HIP-3 funding harvester live
+
+### Added
+- `scripts/hip3_funding.py` — scanner+entry for HL's 66 synthetic perps
+  (stocks: TSLA/NVDA/COIN/HOOD/PLTR/etc., commodities: GOLD/SILVER/CL/
+  BRENTOIL, indices: XYZ100/KR200/JP225, etc.). For each market:
+    score = |funding_rate − BASELINE|
+    filter: OI ≥ $10K, funding percentile ≥ 80th of last 7 days own history
+  Enters SHORT when funding is extremely positive (longs pay, we collect),
+  LONG when extremely negative. 1% risk per trade at 3% stop → $20
+  notional at current $61 account. Caps at 5 concurrent positions and
+  50% of total capital. Uses `margin_helper.ensure_perp_margin` so the
+  spot→perps dance is no longer a blocker.
+- `scripts/hip3_check.py` — daily/hourly exit manager. Closes positions
+  that hit stop (-3%) / target (+6%) / funding-normalized
+  (|fr| < 1.5× baseline) / hold-expired (7 days).
+- `scripts/crontab.example` — hourly entry + exit crons for HIP-3,
+  independent of US market hours (HL is 24/7).
+
+### Verified (dry run)
+```
+wallet 0x253831C3…  perps=$1.36  spot=$60.01  total=$61.37
+[scan] 66 HIP-3 markets pulled
+[scan] 3 pass entry+percentile filter
+candidates:
+  xyz:KR200  long  fr=-0.0433%/hr  82%ile  OI=$98K  mid=$974.95
+  xyz:JP225  (budget exhausted)
+  xyz:DKNG   (budget exhausted)
+```
+KR200 at –0.0433%/hr = –379% annualized funding. A LONG there collects
+~1% per day from funding alone if price stays flat. That's the #1
+leaderboard trader's playbook, applied to our $61 account.
+
+## 2026-04-23 — v2.23.0 — Margin helper: "where's my money" solved forever
+
+### Added
+- `strategies/margin_helper.py` `ensure_perp_margin()` — tiered fallback
+  that makes spot-vs-perps balance-location invisible to strategy code:
+  1. If perps already has enough margin, return immediately.
+  2. Try `usd_class_transfer` with whatever key is in config.json (works
+     for non-agent wallets).
+  3. If that fails and `.main_key` exists at repo root (gitignored, 600
+     perms), load it and retry the transfer with that key.
+  4. If still no luck, print the HL UI URL + exact amount needed, then
+     poll `clearinghouseState` every 30s up to 10 min — auto-continues
+     the moment the user's manual transfer lands.
+- `docs/HL_WALLETS.md` — explains the two-wallet (agent + main)
+  architecture HL recommends, why transfers fail with agent keys, the
+  two user paths: (A) store main key in `.main_key` for fully automatic
+  ops, or (B) approve via UI when the poll fires.
+
+### Changed
+- `scripts/crypto_hodl.py` now calls `ensure_perp_margin()` instead of
+  doing its own transfer attempt. Same logic is now reusable by
+  `hip3_funding.py` and every future HL strategy.
+
+### Why
+User (rightly) frustrated that every HL-script attempt hit the same
+"transfer failed" wall. Root cause is HL's agent-wallet security model
+(correct design, annoying UX). Fix: put the fallback logic behind one
+reusable helper so strategy code never has to know about it.
+
+## 2026-04-23 — v2.22.0 — Leaderboard reverse-engineering
+
+### Added
+- `docs/REVERSE_ENGINEER.md` — pulled all 34,628 HL leaderboard wallets,
+  filtered for "copyable" size ($10K–$10M, > $1K PnL, > $100K volume),
+  ranked with `log(pnl) * sqrt(roi)`. Identified three distinct winning
+  archetypes and analyzed 300 recent fills of each:
+  - **HIP-3 commodity shorts** (`0x863b676e5e...`, $1.3M acct, +$4.85M
+    PnL): systematic short on `xyz:BRENTOIL` + `xyz:CL`. 300/300 fills
+    `Open Short`. This matches exactly the `hip3-funding-harvest-test`
+    strategy in `autoresearch/` that backtested at Sharpe 21.
+  - **Directional swing** (`0x42b9493c50...`, $800K acct, +$3.63M PnL on
+    only $3.64M volume): concentrated bets on `@107`. 99.8% PnL/volume
+    ratio but currently –$25K in drawdown. Not copyable at $60.
+  - **Rebate HFT** (`0x29998ebd5b...`, $42K acct, +$2.21M PnL on $1.42B
+    volume): the `$6.8K → $1.5M` archetype. 33,833× turnover. Requires
+    maker-rebate tier, unreachable at our volume.
+- Conclusion: only HIP-3 commodity harvesting is copyable at our size.
+  Expected $36/year on $60 from that leg alone at conservative turnover.
+  Stack with PEAD (+$15/yr) and BTC HODL (+$2-20/yr depending) =
+  $50-80/yr positive EV across three uncorrelated streams.
+
+### Discovered while running v2.21's --live
+- HL agent-wallet pattern: the private key in `config.json` signs as
+  `0xa6693a...` (agent) but the main wallet is `0x253831...`. Agents can
+  trade on behalf of the main, but can't transfer spot→perps — only the
+  main wallet's key can. crypto_hodl.py's auto-transfer step fails here;
+  user must do that transfer manually in the HL web UI before the basket
+  will fire. Documented in REVERSE_ENGINEER.md.
+
+## 2026-04-23 — v2.21.0 — HL crypto HODL basket (BTC/ETH/SOL/HYPE at 1x)
+
+### Added
+- `scripts/crypto_hodl.py` — equal-weight long basket on HL perps at 1x
+  leverage. Puts directional crypto exposure on the same wallet that was
+  sitting idle during every BTC up-move. Default $10 × 4 coins = $40 of
+  ~$61 total account, keeps ~$21 dry.
+- Self-healing built in:
+  - Refuses to run if the MM bot's heartbeat is fresh (MM and HODL on
+    the same wallet would fight each other).
+  - Auto-adds every coin in the basket to `orphan_exempt_coins` in
+    `config.json` so that if the MM bot is later restarted, it won't
+    auto-flatten these as orphans (the 2026-04-04 orphan-cleanup code
+    would otherwise eat them).
+  - Detects that USDC lives on HL spot, not perps, and auto-transfers
+    the margin needed via `exchange.usd_class_transfer(to_perp=True)`.
+  - Limit orders at mid + 50 bps slippage cap (not market orders).
+  - 25% per-coin cap, 75% total-deploy cap, hard refusal if either
+    would be breached.
+
+### Verified (dry run against live wallet)
+```
+perps equity:  $1.37   (existing WLD long)
+spot USDC:     $60.04
+total:         $61.41
+
+plan: transfer $40.63 spot→perps, then:
+  BTC   0.000128  @ $78,119  limit<$78,510
+  ETH   0.004255  @ $2,350   limit<$2,362
+  SOL   0.116176  @ $86.08   limit<$86.51
+  HYPE  0.243555  @ $41.06   limit<$41.26
+```
+
+Dry-run only in this commit. --live path requires explicit user go-ahead
+because unlike Alpaca paper, this is real money.
+
+## 2026-04-23 — v2.20.0 — Exit automation + self-healing watchdog
+
+### Added
+- `scripts/pead_check.py` — daily exit manager for the PEAD portfolio.
+  Evaluates every open position against –8% stop / +16% target / 45-day
+  hold window. Dry-run by default; `--live` to actually close. Appends
+  every decision to pead_trades.jsonl for PnL reconciliation. Without
+  this, the 11 paper orders we just placed would sit forever.
+- `scripts/watchdog.py` — runs every 15 min via cron. Notices:
+    * Alpaca equity drop > 10% vs last-day baseline
+    * Any single position > 25% of equity
+    * Buy orders accepted > 24h ago and never filled (dead orders)
+    * HL bot status file stale > 5 min while `running=True`
+  `--heal` flag authorizes automatic cancellation of dead orders. Does
+  NOT auto-restart the HL bot — stop state is deliberate until proven
+  otherwise.
+- `scripts/crontab.example` — template crontab wiring watchdog + pead_check
+  on US market hours (Mon–Fri, New York time). Entry script stays disabled
+  until 5 days of positive PEAD PnL is measured.
+- `docs/SELF_RATING.md` — current 7/10 self-assessment. What moved us from
+  5 → 7 this session; what each remaining gap is worth and who owns the fix.
+
+### Why
+User asked "make it 10/10 so it's profitable, it should be self-healing."
+Exit automation was the single biggest missing piece: without it we open
+positions with no closing mechanism. Watchdog + cron = "doesn't need
+someone watching it." Doc is the ongoing scorecard so we can't lie to
+ourselves about where we actually are.
+
+## 2026-04-23 — v2.19.0 — PEAD diversification + queue-dedup
+
+### Changed
+- `scripts/first_pead_trade.py` — default behavior flipped from "top 3
+  concentrated at 18.75% each" to "top 10 diversified at 5% each, capped
+  at 60% of cash deployed." Penny-stock skip at $3 min. Dedup against
+  both `/v2/positions` AND `/v2/orders?status=open` so we don't double up
+  on tickers from a prior same-session run (the reason I fixed this on
+  second execution — it tried to re-buy CCI and LBRT from the v2.18 run).
+- New flags: `--per-position-pct`, `--max-deploy-pct`, `--min-price`.
+
+### Why
+User asked "can this run all S&P 500 stocks at once?" — yes, and the
+wider basket actually fits the PEAD edge better. Academic result relies
+on a diversified portfolio (20+ names), not concentrated bets on 3.
+Penny-stock filter prevents the noise-heavy sub-$3 names from eating the
+budget. Queue-dedup means we can re-run the script safely without
+double-allocating to the same ticker.
+
+## 2026-04-23 — v2.18.0 — Finnhub earnings feed + first PEAD trade script
+
+### Added
+- `scripts/first_pead_trade.py` — fetches Finnhub earnings calendar,
+  filters for > 5% EPS surprises, sizes via `strategies.sizing`, and
+  either previews (default) or places paper orders via the Alpaca broker
+  (`--live`). Logs each submission to `pead_trades.jsonl`.
+- `.finnhub_key` — gitignored, 600 perms, holds the free-tier API key.
+
+### Verified on live data
+Today's top positive surprises (Apr 20–23):
+```
+CCI  +161.5%  (Crown Castle, REIT)
+BDN  +153.1%  (Brandywine Realty)
+LBRT +145.2%  (Liberty Oilfield Services)
+```
+Dry run sized each at $187.50 on the $1K paper account (18.75% of equity,
+under the 20% cap). All three beat enough to clear the 5% noise floor
+and then some.
+
+## 2026-04-23 — v2.17.0 — Alpaca paper broker wired end-to-end
+
+### Added
+- `strategies/_alpaca_broker.py` — concrete `AlpacaBroker` implementing
+  the `BrokerInterface` protocol from `earnings_drift.py`. Pure stdlib
+  (urllib + json); no alpaca-py dependency. Supports account read,
+  position list, fractional-share notional market buys (Alpaca $1 min),
+  share-qty sells, order list/cancel, latest-trade price lookup.
+- `scripts/alpaca_smoke_test.py` — end-to-end check: loads `.alpaca_keys`,
+  hits `/v2/account`, fetches AAPL latest trade, simulates a +15% EPS
+  surprise, and reports the dollar size PEAD would submit. Does NOT
+  place any order. Run before every live-ish session.
+- `.gitignore` — `.alpaca_keys` excluded (`chmod 600`). Keys live only on
+  the local filesystem, never in git.
+
+### Verified end-to-end
+Paper account `PA3AVAG3J1DC`, $1,000 starting equity. Smoke test output:
+```
+surprise_pct: +15.00%
+signal:       +1
+size (USD):   $187.50  (18.75% of equity — under 20% cap)
+```
+The next PEAD event with a >5% surprise will be the first live (paper)
+trade through this stack. `scripts/first_pead_trade.py` to follow once we
+wire an earnings calendar feed (Finnhub free tier or yfinance).
+
+## 2026-04-23 — v2.16.0 — Strategy library + position-sizing math
+
+### Added
+- `strategies/sizing.py` — three sizing methods, each with explicit math:
+  `fixed_fractional`, `fractional_kelly` (half-Kelly default, never full),
+  `vol_scaled` for equal-risk across assets. Hard 20% cap per position
+  enforced at the end of every path. `break_even_bps()` helper returns the
+  minimum edge a strategy must capture to survive fees at our tier
+  (5 bps maker/maker, 14 bps taker/taker).
+- `strategies/earnings_drift.py` — Post-Earnings Announcement Drift
+  (Bernard & Thomas 1989). Signal fires on > 5% EPS surprise; half-stop at
+  8%, target at 16%, hold window 45 days. Weighted by surprise magnitude.
+  Broker interface stubbed — TODO to wire Alpaca + Finnhub (both have free
+  tiers with fractional shares / API access). Math runs today; user sees
+  $11.44 size at $61 account on a +15% surprise.
+- `strategies/trend_follow.py` — 50/200 dual MA on Hyperliquid perps,
+  long-only, daily tick. Vol-scaled sizing so BTC (3% daily vol) gets less
+  notional than DOGE (10% daily vol). This is what captures "BTC went up"
+  moves that the delta-neutral MM bot never participated in.
+- `docs/MATH.md` — the equations. Fixed fractional, Kelly, vol-scaled, all
+  with worked examples at $61 account size. PEAD equation, trend equation,
+  funding-harvest equation, stat-arb equation. Fee budget math showing why
+  any strategy with < 5 bps expected edge loses at our tier. Realistic
+  year-ahead expectation table: $4-$17 total on a $61 account across four
+  strategies. Not get-rich-quick. Positive expected value.
+
+### Why
+User asked: "if a company has good earnings we should be able to put a
+dollar in there, find equations and quant math, proportional to account."
+Answer: PEAD + fractional-share brokers (Alpaca) makes the $1-stock-buy
+thesis actually implementable; the math is in sizing.py. This commit puts
+both the math and a reference implementation in the repo so future strategy
+work doesn't reinvent either. Every strategy delegates sizing to a single
+module so we can never again size from a naked constant (the root cause of
+the v2.13 $30 drawdown documented in POSTMORTEM.md).
+
+## 2026-04-23 — v2.15.0 — Preflight config validator + strategy docs
+
+### Added
+- `docs/POSTMORTEM.md` — commit-by-commit walkthrough of the $90 → $60
+  drawdown. Maps each $ lost to a cause, traces when the force-close bug
+  was introduced (2026-03-13 "doctor round 5"), and lists outstanding
+  action items (investigate bot auto-respawn, rotate keys, etc).
+- `docs/MCP_SETUP.md` — inventory of every MCP tool used, with current
+  status (works / broken / gap). `bot_config_set` is documented as broken,
+  `mcp__telegram__*` as session-locked, direct-SSH as a gap.
+- `preflight.py` — config + math sanity checker, run automatically at
+  `trader.main()` startup. Refuses to launch if any of these are true:
+  - `MAX_INVENTORY_USD < ORDER_SIZE_USD * 1.1` (the v2.13 force-close
+    deadlock that cost ~$15–25)
+  - `MAX_POSITION_NOTIONAL < ORDER_SIZE_USD * 1.5`
+  - `min_spread_bps < 2*maker_fee + 2bps edge target`
+  - `safety_bps_strict < 2*maker_fee`
+  - A pair in `pairs` is on the `KNOWN_BAD_PAIRS` list or has observed
+    natural spread below required gate (ARK, BTC, ETH currently flagged
+    for our fee tier).
+  Override with `PREFLIGHT=warn` env var for dev/debug only.
+- `docs/WHY_WE_LOSE.md` — the honest math of the $90 → $60 drawdown.
+  Documents fees vs spreads, adverse selection, and the force-close bug
+  mechanism.
+- `docs/WINNING_PLAYBOOK.md` — five strategies with verifiable track
+  records (maker-rebate farming, funding harvest, pairs/stat-arb, trend
+  following, cross-exchange arb) with honest notes on which are viable at
+  our account size.
+- `docs/DIRECTIONAL.md` — answers "why didn't I make money when BTC went
+  up?" MM is delta-neutral by design; covers HODL, trend-following, and
+  copy-trading as ways to actually participate in upside.
+- `docs/LEADERBOARDS.md` — pointers to Hyperliquid's on-chain leaderboard
+  (app.hyperliquid.xyz/leaderboard) plus beacontrade.io and
+  hyperliquidi.com so we can study who's actually winning.
+
+### Why
+User asked "why am I losing all this money, how do others make money, we
+should be able to trade anything, write it down in the repo." Without
+documented math and a startup guard, another silent regression (like v2.13
+flipping `MAX_INVENTORY_USD` from 35 to 3.5) would drain the account again.
+The repo now fails loudly instead of bleeding quietly.
+
+## 2026-04-23 — v2.14.0 — Force-close deadlock fix + TG token de-hardcode
+
+### Fixes
+- **Primary PnL leak — inventory cap vs order size mismatch (trader.py):**
+  `MAX_INVENTORY_USD = 3.5` combined with `order_size_usd = 25` meant every
+  fill was instantly 7.1× over cap → `overweight_ratio > 4.0` triggered
+  `OVERWEIGHT FORCE CLOSE` on every single round trip, taker-fee exits, guaranteed
+  loss. Changed to `max(30.0, ORDER_SIZE_USD * 1.2)` so the cap auto-scales with
+  configured order size. Same fix applied to `MAX_POSITION_NOTIONAL`.
+- **Per-coin equity fraction too tight (trader.py):** `account_value * 0.10` =
+  $6 at $61 equity, clamped effective cap below one full order. Raised to 0.50
+  and flipped min→max: `effective_inv_cap = max(MAX_INVENTORY_USD, max_inv_equity)`.
+- **Max-hold timer cut winning trips short (trader.py):** the completed_trips
+  dataset shows winners held 7–24 min while losers held <5 min. The 300s force-close
+  was evicting profitable inventory. Raised to 900s.
+- **Exit-urgency trigger too early (trader.py):** `hold_secs > 60` pushed the max
+  14bps exit skew within 1 min, bleeding edge on healthy trades. Raised to 300s.
+- **Misleading `withdrawable` field (trader.py:703):** status JSON stored
+  `totalNtlPos` under the key `withdrawable`. Now reads the actual `withdrawable`
+  from account state (fallback `totalRawUsd`); `totalNtlPos` moved to its own key.
+- **Hardcoded Telegram creds (trader_pingpong.py:23–24):** moved to env/config
+  lookup (`TG_TOKEN`, `TG_CHAT_ID`). Token never in source anymore.
+- **Unused imports:** removed `from typing import Optional` in both files.
+
+### Why
+Live data from 2026-04-23 session: 31 trips, 7W/24L (23% WR), avg trip net
+-$0.037, trip_fee_ratio 3798×, portfolio -$5.33/hr. Tracing the log showed
+"OVERWEIGHT FORCE CLOSE" firing on nearly every fill — the strategy never
+got the chance to earn the spread because it force-closed at a taker fee
+~2s after every maker fill. This is the #1 mechanism behind the $90 → $60
+drawdown. Winners in the dataset (APE +$0.101 @ 24min hold, PENDLE +$0.039
+@ 7min hold) all survived this path by coincidence of timing.
+
+### Recommended config.json (apply on VPS, not committed)
+- `pairs`: `["PENDLE-PERP"]` — drop ARK (spread 2–4bps) and APE (spread 4–8bps),
+  both below the round-trip fee floor. PENDLE showed real 11–17bps spreads
+  and is the only pair with winning trips in the dataset.
+- `min_spread_bps`: 15 → 25
+- `safety_bps_strict`: 4.0 → 8.0
+- `order_size_usd`: keep 25
+
+### Deploy
+```
+ssh ubuntu@44.205.58.31
+cd ~/hyperliquid-sol && git fetch bot && git checkout feat/funding-scanner && git pull bot feat/funding-scanner
+# edit config.json per above
+# restart MM process (tmux / systemd — verify which is respawning it)
+```
+
+## 2026-04-17 — Funding-rate scanner leg (feat/funding-scanner)
+
+### Added
+- `autoresearch/live_funding_scan.py` — scans every HL perp each poll (60s),
+  ranks by |funding - 1.25e-5 baseline|, filters by $5M min OI, opens up to
+  2 maker-only positions on the highest funding extremes. Exits when
+  funding normalizes, flips sign vs our side, or adverse price move >=5%.
+  RiskManager 3% daily-loss kill, $30 total-notional cap.
+- First live deployment found: LONG WLD @ -75% APY (`$19M OI`), SHORT STBL @
+  +62% APY (`$5.2M OI`). Posted @ mid ±0.1% as post-only ALO.
+
+### Changed
+- Stopped MM leg (`trader.py`) — market spreads on ARK/APE/PENDLE collapsed
+  to 3-4bps vs 7bps required gate; bot was correctly idle but not earning.
+  MM capital now reallocated to scanner leg. Will resume MM when a regime
+  returns where it's backtest-positive.
+
+### Why
+- 9 days of MM data showed -$0.21 net, avg edge -1.3bps, trip-fee-ratio
+  390x. Even after today's weak-gate fix, live MM lost $0.75 in 1 hour as
+  soon as it resumed trading. MM strategy has no edge at this account size
+  on these pairs. The `offprem` backtest dashboard
+  (https://assiamahs.github.io/offprem/) shows `hip3-funding-harvest-test`
+  with Sharpe 21 — the highest in 25+ strategies tested. Funding-harvest
+  is the validated lane. Generalized it from a single hardcoded `xyz:SILVER`
+  to a live scanner so it actually has trades to make instead of polling
+  a quiet market for days.
+
 ## 2026-04-17 — Weak-pair deadlock fix + stall watchdog
 
 ### Fixes

@@ -129,10 +129,14 @@ class TelegramCommander:
                 "/params - List tunable params\n"
                 "/set &lt;param&gt; &lt;value&gt; - Change param\n"
                 "/pos - Current positions\n"
+                "/pairs - Active pairs list\n"
+                "/droppair &lt;COIN&gt; - Remove pair + close position\n"
+                "/addpair &lt;COIN&gt; - Add a new pair\n"
                 "/pause - Pause quoting\n"
                 "/resume - Resume quoting\n"
                 "/stop - Graceful shutdown\n"
                 "/trips - Round trip stats\n"
+                "/orphans - Close positions not in PAIRS\n"
                 "/help - This message"
             )
 
@@ -252,6 +256,71 @@ class TelegramCommander:
             winners = sum(1 for t in ct if t["net"] >= 0)
             lines.append(f"\nTotal: ${total_net:.4f} | Avg: ${avg_net:.4f} | WR: {winners}/{len(ct)}")
             return "\n".join(lines)
+
+        elif cmd == "/pairs":
+            pairs = self.trader.PAIRS
+            coins = [self.trader.COIN_MAP.get(p, p) for p in pairs]
+            return f"<b>Active Pairs ({len(pairs)})</b>\n" + "\n".join(f"  {p} ({c})" for p, c in zip(pairs, coins))
+
+        elif cmd == "/droppair":
+            if len(parts) < 2:
+                return "Usage: /droppair SOL  (coin name, not pair name)"
+            coin = parts[1].upper()
+            pair = f"{coin}-PERP"
+            if pair not in self.trader.PAIRS:
+                return f"{pair} not in active pairs: {self.trader.PAIRS}"
+            # Remove from all tracking structures
+            self.trader.PAIRS.remove(pair)
+            self.trader.COIN_MAP.pop(pair, None)
+            self.trader.pair_fills.pop(pair, None)
+            self.trader.pair_trade_count.pop(pair, None)
+            self.trader.live_quotes.pop(coin, None)
+            self.trader.trip_tracker.pop(coin, None)
+            # Close position if any
+            positions = self.trader.last_balances.get("positions", {})
+            if coin in positions and positions[coin].get("size", 0) != 0:
+                try:
+                    self.trader.close_orphan_positions(
+                        self.trader.info,
+                        self.trader.exchange,
+                        self.trader.WALLET_ADDRESS,
+                    )
+                    return f"Dropped {pair} and closing {coin} position"
+                except Exception as e:
+                    return f"Dropped {pair} from config but close failed: {e}"
+            return f"Dropped {pair}. Remaining: {self.trader.PAIRS}"
+
+        elif cmd == "/addpair":
+            if len(parts) < 2:
+                return "Usage: /addpair SOL  (coin name)"
+            coin = parts[1].upper()
+            pair = f"{coin}-PERP"
+            if pair in self.trader.PAIRS:
+                return f"{pair} already active"
+            self.trader.PAIRS.append(pair)
+            self.trader.COIN_MAP[pair] = coin
+            self.trader.pair_fills[pair] = []
+            self.trader.pair_trade_count[pair] = 0
+            self.trader.price_history[coin] = []
+            # Fetch metadata for new coin
+            try:
+                self.trader.fetch_asset_metadata()
+            except Exception:
+                pass
+            return f"Added {pair}. Active: {self.trader.PAIRS}"
+
+        elif cmd == "/orphans":
+            try:
+                closed = self.trader.close_orphan_positions(
+                    self.trader.info,
+                    self.trader.exchange,
+                    self.trader.WALLET_ADDRESS,
+                )
+                if closed:
+                    return f"Closed {closed} orphan position(s)"
+                return "No orphan positions found"
+            except Exception as e:
+                return f"Orphan cleanup error: {e}"
 
         elif cmd.startswith("/"):
             return f"Unknown command: {cmd}\nUse /help for available commands"

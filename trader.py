@@ -16,7 +16,6 @@ socket.setdefaulttimeout(5)  # prevent hanging on slow API calls
 import urllib.request
 import urllib.parse
 from collections import deque
-from typing import Optional
 
 from eth_account import Account
 from hyperliquid.info import Info
@@ -166,8 +165,8 @@ VOL_WINDOW = 20
 
 # Risk governor limits (scaled for small portfolio)
 MAX_DRAWDOWN = 0.50  # raised: account already absorbed prior losses, protect from here
-MAX_INVENTORY_USD = 3.5  # tighter cap per coin, forces faster exits
-MAX_POSITION_NOTIONAL = 25.0  # hard cap: total exposure across all coins cannot exceed this
+MAX_INVENTORY_USD = max(30.0, ORDER_SIZE_USD * 1.2)  # must exceed one full order, else every fill triggers force-close
+MAX_POSITION_NOTIONAL = max(50.0, ORDER_SIZE_USD * 2.0)  # allow ≥2 coins simultaneously at configured order size
 MAX_VOLATILITY_BPS = 50
 COOLDOWN_SECS = 30
 risk_cooldown_until = 0
@@ -700,7 +699,8 @@ def get_account_state(info, address):
                 "perps_value": perps_value,
                 "spot_usdc": spot_usdc,
                 "total_margin": float(margin.get("totalMarginUsed", 0)),
-                "withdrawable": float(margin.get("totalNtlPos", 0)),
+                "withdrawable": float(state.get("withdrawable", margin.get("totalRawUsd", 0))),
+                "total_ntl_pos": float(margin.get("totalNtlPos", 0)),
             }
 
             positions = {}
@@ -1526,8 +1526,8 @@ def run_cycle(info, exchange, address):
         inv_extra_skew = 0.0
 
         # Per-coin inventory cap: block entry side when over limits
-        max_inv_equity = account_value * 0.10  # 10% of equity per coin (tighter cap = faster rebalance)
-        effective_inv_cap = min(MAX_INVENTORY_USD, max_inv_equity)
+        max_inv_equity = account_value * 0.50  # 50% of equity per coin — must accommodate one full order
+        effective_inv_cap = max(MAX_INVENTORY_USD, max_inv_equity)
         if pos_usd > effective_inv_cap:
             if pos_size > 0:
                 allow_buy = False  # LONG over cap: block more buying
@@ -1590,7 +1590,7 @@ def run_cycle(info, exchange, address):
                 live_quotes.pop(coin, None)
                 continue
 
-            if hold_secs > 300:  # 5min: force close (limit, not market) — was 10min, tightened
+            if hold_secs > 900:  # 15min: force close (limit, not market) — winning trips held 7-24 min, give them room
                 # 5+ minutes: force close with LIMIT order (avoid taker fees)
                 print(f"  {coin} | MAX HOLD: {hold_secs:.0f}s, force closing (limit)")
                 for o in coin_orders:
@@ -1617,8 +1617,8 @@ def run_cycle(info, exchange, address):
                 # DON'T pop trip_tracker — let market close fill complete the trip in check_fills
                 live_quotes.pop(coin, None)
                 continue
-            elif hold_secs > 60 or overweight_ratio > 2.0:
-                # 1+ minutes OR 2x+ over cap: max exit urgency (was 2min, tightened)
+            elif hold_secs > 300 or overweight_ratio > 2.0:
+                # 5+ minutes OR 2x+ over cap: bump exit urgency — lets maker fills work the spread first
                 inv_extra_skew = max(inv_extra_skew, 14.0)
 
         if is_exit_only:
@@ -2380,6 +2380,30 @@ def close_orphan_positions(info, exchange, address):
 
 
 def main():
+    # Preflight: refuse to launch on broken math (force-close deadlock, etc).
+    # Override via PREFLIGHT=warn env var if a one-off needs it (never in prod).
+    try:
+        import preflight as _pf
+        _pf_fails = _pf.validate(
+            config,
+            trader_constants={
+                "MAX_INVENTORY_USD": MAX_INVENTORY_USD,
+                "MAX_POSITION_NOTIONAL": MAX_POSITION_NOTIONAL,
+            },
+        )
+        if _pf_fails:
+            mode = os.environ.get("PREFLIGHT", "strict").lower()
+            print("preflight: FAIL — config/math issues detected:")
+            for _m in _pf_fails:
+                print(f"  - {_m}")
+            if mode != "warn":
+                print("preflight: refusing to start. Fix config or set PREFLIGHT=warn to override.")
+                tg_send("❌ preflight blocked bot start — check VPS logs")
+                sys.exit(1)
+            print("preflight: PREFLIGHT=warn set, continuing anyway.")
+    except ImportError:
+        print("preflight: module not found, skipping checks")
+
     print("=" * 55)
     print("  Hyperliquid Market Maker (Event-Driven)")
     print(f"  Pairs: {PAIRS}")

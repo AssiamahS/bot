@@ -1,0 +1,30 @@
+# Cron setup for PEAD + watchdog — install with: crontab scripts/crontab.example
+#
+# Edit paths below to match your machine. Times are America/New_York unless
+# your system is set to UTC — run `date` to confirm. Add a PATH if python3
+# isn't on cron's default (on macOS cron, it often isn't).
+PATH=/usr/local/bin:/usr/bin:/bin:/Users/djsly/.pyenv/shims
+
+# Weekdays only for PEAD (markets closed Sat/Sun)
+# 09:35 ET — 5 min after open, check if any overnight-submitted orders need review
+35 9 * * 1-5 cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/watchdog.py --heal >> logs/watchdog.log 2>&1
+
+# 15:55 ET — daily exit check, 5 min before close, close any stop/target/aged positions
+55 15 * * 1-5 cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/pead_check.py --live >> logs/pead_check.log 2>&1
+
+# 09:15 ET — before-open earnings scan. Places paper buys on new top surprises
+# Disabled until we confirm 5-day PEAD PnL is net positive — edit "15 9" to enable
+# 15 9 * * 1-5 cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/first_pead_trade.py --live --days 1 --top 10 >> logs/pead_entry.log 2>&1
+
+# Every 15 minutes during market hours — watchdog sanity check
+*/15 9-16 * * 1-5 cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/watchdog.py >> logs/watchdog.log 2>&1
+
+# === HIP-3 funding harvester (Hyperliquid, 24/7) ===
+# Crypto/HL markets run 24/7, not constrained to US market hours.
+# Funding settles hourly on HL, so we scan+check hourly.
+
+# Every hour: scan for new extreme-funding entries on HIP-3 perps
+5 * * * * cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/hip3_funding.py --live >> logs/hip3_entry.log 2>&1
+
+# Every hour (offset 15 min): evaluate exits for existing HIP-3 positions
+20 * * * * cd /Users/djsly/hyperliquid-sol && /usr/bin/env python3 scripts/hip3_check.py --live >> logs/hip3_check.log 2>&1

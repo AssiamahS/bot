@@ -1,0 +1,27 @@
+{"ts": "2026-07-31T23:18:49+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-07-31T23:28:51+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-07-31T23:38:54+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-07-31T23:49:11+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-07-31T23:59:58+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.1537063225341615, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T00:10:02+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T00:20:07+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T00:30:10+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T00:40:15+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T00:50:26+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.14795367814285712, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T08:02:31+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T08:12:39+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T08:22:42+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T08:32:44+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T08:42:47+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T08:52:50+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.12915822214285716, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:02:52+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:12:54+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:22:58+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:33:00+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:43:02+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T09:53:05+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-01T10:03:07+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T10:13:10+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T10:23:12+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T10:33:15+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-01T10:43:18+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "AZTEC", "net_apr": 0.11649381714285714, "fr_now": 1.25e-05, "gate": false}}

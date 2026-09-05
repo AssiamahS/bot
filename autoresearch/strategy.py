@@ -1,51 +1,35 @@
 #!/usr/bin/env python3
-"""
-Trading strategy — THIS FILE IS EDITED BY THE AI AGENT.
-Improved v2 with added Bollinger Bands and adjusted entry conditions for BTC, ETH, SOL.
-"""
+"""Funding-rate harvest. Short when funding extreme positive (longs paying), long when extreme negative.
+Receives funding as PnL boost while holding the position."""
 
-import numpy as np
 import pandas as pd
 
 
-def ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
-
-
-def rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-    rs = gain / (loss + 1e-10)
-    return 100 - (100 / (1 + rs))
-
-
-def bollinger_bands(close, window=20, dev_multiple=2):
-    rolling_mean = close.rolling(window).mean()
-    rolling_std = close.rolling(window).std()
-    upper_band = rolling_mean + (rolling_std * dev_multiple)
-    lower_band = rolling_mean - (rolling_std * dev_multiple)
-    return upper_band, lower_band
-
-
 def generate_signals(df):
-    close, high, low = df["close"], df["high"], df["low"]
+    if "funding_rate" not in df.columns:
+        return pd.Series(0, index=df.index, dtype=int)
 
-    # EMA crossovers with RSI filter
-    fast_ema = ema(close, 26)
-    slow_ema = ema(close, 50)
-    rsi_val = rsi(close, 14)
+    fr = df["funding_rate"].astype(float)
+    fr_high = fr.rolling(168).quantile(0.85)
+    fr_low = fr.rolling(168).quantile(0.15)
 
-    signals = pd.Series(0, index=df.index)
-    
-    # Main crossover signal
-    up_trend = (fast_ema > slow_ema) & (rsi_val < 70)
-    down_trend = (fast_ema < slow_ema) & (rsi_val > 30)
-
-    # Bollinger Bands for additional filtering
-    upper_band, lower_band = bollinger_bands(close, window=20, dev_multiple=2)
-    
-    signals[up_trend] = 1  # Bullish EMA cross with RSI under 70
-    signals[down_trend & (close < lower_band)] = -1  # Bearish EMA cross AND price below BB lower band
-
-    return signals
+    sig = pd.Series(0, index=df.index, dtype=int)
+    pos = 0
+    for i in range(len(df)):
+        f = fr.iloc[i]
+        hi = fr_high.iloc[i]
+        lo = fr_low.iloc[i]
+        if pd.isna(hi) or pd.isna(lo):
+            sig.iloc[i] = pos
+            continue
+        if pos == 0:
+            if f > 0 and f >= hi:
+                pos = -1
+            elif f < 0 and f <= lo:
+                pos = 1
+        elif pos == -1 and f <= 0:
+            pos = 0
+        elif pos == 1 and f >= 0:
+            pos = 0
+        sig.iloc[i] = pos
+    return sig

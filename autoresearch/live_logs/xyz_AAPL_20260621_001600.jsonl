@@ -1,0 +1,19 @@
+{"ts": "2026-06-21T04:26:37+00:00", "equity": 88.54306015000002, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474958007894}}]}}}}
+{"ts": "2026-06-21T04:36:44+00:00", "equity": 88.53643315000001, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474962785566}}]}}}}
+{"ts": "2026-06-21T04:46:50+00:00", "equity": 88.56403215, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474967578722}}]}}}}
+{"ts": "2026-06-21T04:57:07+00:00", "equity": 88.55489715, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474973402553}}]}}}}
+{"ts": "2026-06-21T05:07:14+00:00", "equity": 88.54742415000001, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474977918447}}]}}}}
+{"ts": "2026-06-21T05:17:20+00:00", "equity": 88.61777115, "pos": 0.051, "fr": 6.25e-06, "hi": 1.18198e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "close_long", "order_resp": {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 474981387435}}]}}}}
+{"ts": "2026-06-21T11:15:07+00:00", "equity": 88.55332115, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T11:25:09+00:00", "equity": 88.62781715, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T11:35:10+00:00", "equity": 88.68372514999999, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T11:45:12+00:00", "equity": 88.64272115, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T11:55:14+00:00", "equity": 88.68346715, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:05:16+00:00", "equity": 88.65125915, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:15:17+00:00", "equity": 88.55971415, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:25:19+00:00", "equity": 88.56743815, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:35:21+00:00", "equity": 88.58545615, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:45:22+00:00", "equity": 88.53694815, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T12:55:24+00:00", "equity": 88.50262215000001, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T13:05:37+00:00", "equity": 88.61164615, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
+{"ts": "2026-06-21T13:15:39+00:00", "equity": 88.67443015, "pos": 0.0, "fr": 6.25e-06, "hi": 1.15193e-05, "lo": 1.0732e-06, "apy_now": 5.475, "decision": "hold"}
