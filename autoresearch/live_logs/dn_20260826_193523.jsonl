@@ -1,0 +1,89 @@
+{"ts": "2026-08-26T23:35:30+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PUMP", "net_apr": 0.16709895014285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_PURR"}
+{"ts": "2026-08-26T23:45:32+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PUMP", "net_apr": 0.16709895014285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_PURR"}
+{"ts": "2026-08-26T23:55:35+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PUMP", "net_apr": 0.16709895014285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T00:05:37+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.21239563264285716, "fr_now": 0.0003174005, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T00:15:40+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.21239563264285716, "fr_now": 0.0003174005, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T00:25:42+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.21239563264285716, "fr_now": 0.0003174005, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T00:35:45+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.21239563264285716, "fr_now": 0.0003174005, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T00:45:47+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.21239563264285716, "fr_now": 0.0003174005, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T01:16:51+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.29502612114285715, "fr_now": 0.0002388849, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T01:26:55+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.29502612114285715, "fr_now": 0.0002388849, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T01:36:58+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.29502612114285715, "fr_now": 0.0002388849, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T01:47:18+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.29502612114285715, "fr_now": 0.0002388849, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T01:57:21+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.29502612114285715, "fr_now": 0.0002388849, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T02:07:25+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3354155246428572, "fr_now": 0.0001231559, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T02:28:00+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3354155246428572, "fr_now": 0.0001231559, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T02:38:04+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3354155246428572, "fr_now": 0.0001231559, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T02:48:07+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3354155246428572, "fr_now": 0.0001231559, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T02:58:11+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3354155246428572, "fr_now": 0.0001231559, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T03:08:15+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3814178251428572, "fr_now": 0.0001385337, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T03:18:21+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3814178251428572, "fr_now": 0.0001385337, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T03:39:04+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3814178251428572, "fr_now": 0.0001385337, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T03:49:12+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3814178251428572, "fr_now": 0.0001385337, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T03:59:17+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.3814178251428572, "fr_now": 0.0001385337, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:09:21+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:19:26+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:29:30+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:39:35+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:49:40+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T04:59:45+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 0.0002632158, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T05:09:50+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T05:19:56+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T05:29:59+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T05:40:04+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T05:50:09+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:00:15+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:10:19+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:20:24+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:30:29+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:40:33+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T06:50:38+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T07:00:43+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.47292909214285717, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T11:01:59+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T11:12:01+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T11:22:11+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T11:32:19+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T11:42:25+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T11:52:28+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.4695566746428571, "fr_now": 5.8649e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:02:31+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:12:33+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:22:36+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:32:38+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:42:40+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T12:52:43+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5023260461428571, "fr_now": 0.0001022791, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:02:45+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:12:48+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:22:51+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:32:53+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:42:56+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T13:52:58+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.5099154911428572, "fr_now": 3.3293e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T22:48:32+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7800822131428572, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T22:58:32+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7800822131428572, "fr_now": 1.25e-05, "gate": true}, "decision": "enter_PURR"}
+{"ts": "2026-08-27T23:08:35+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T23:18:38+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T23:28:40+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T23:38:42+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T23:48:47+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-27T23:58:49+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.7229430691428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T00:08:52+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.6116543866428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T00:18:54+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.6116543866428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T00:28:57+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.6116543866428572, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T03:27:09+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.44263219414285726, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T03:37:11+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.44263219414285726, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T03:47:14+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.44263219414285726, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T03:57:17+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.44263219414285726, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:07:19+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:17:22+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:27:24+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:37:27+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:47:30+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T04:57:32+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}}
+{"ts": "2026-08-28T05:07:35+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T05:17:37+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T05:27:40+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T05:37:42+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T05:47:45+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T05:57:48+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T06:07:50+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T06:17:53+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}
+{"ts": "2026-08-28T06:27:55+00:00", "usdc": 1.00190315, "coin": null, "best": {"token": "PURR", "net_apr": 0.35112092714285714, "fr_now": 1.25e-05, "gate": false}, "decision": "enter_AZTEC"}

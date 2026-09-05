@@ -232,10 +232,10 @@ mcp = FastMCP(
     auth=AuthSettings(
         # issuer has a path component so /.well-known/oauth-authorization-server
         # lands at /{SECRET}/.well-known/... not at root
-        issuer_url=AnyHttpUrl(f"{TUNNEL_URL}/{SECRET}"),
+        issuer_url=AnyHttpUrl(TUNNEL_URL),
         # None = skip creating the RFC 9728 protected-resource metadata endpoint,
         # which would otherwise be placed at root /.well-known/ (also blocked)
-        resource_server_url=None,
+        resource_server_url=AnyHttpUrl(f"{TUNNEL_URL}/mcp"),
         client_registration_options=ClientRegistrationOptions(enabled=True),
     ),
 )
@@ -385,13 +385,7 @@ def perf_journal(coin: str = "", events: int = 60) -> str:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    from starlette.applications import Starlette
-    from starlette.routing import Mount
-
-    # Wrap the inner FastMCP app under /{SECRET} so every route — MCP endpoint,
-    # OAuth metadata, register, authorize, token — is served under the secret
-    # prefix and never at root /.well-known/ (blocked by Cloudflare quick tunnels).
-    inner = mcp.streamable_http_app()
-    app = Starlette(routes=[Mount(f"/{SECRET}", app=inner)])
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    # Use FastMCP's native runner so the Streamable HTTP task group is initialized.
+    mcp.settings.host = "127.0.0.1"
+    mcp.settings.port = PORT
+    mcp.run(transport="streamable-http")

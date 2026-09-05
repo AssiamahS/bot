@@ -257,9 +257,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass  # quiet
 
 
+VPS_HOST = "ubuntu@44.205.58.31"
+VPS_KEY = os.path.expanduser("~/.ssh/hl-bot-key.pem")
+VPS_STATUS = "~/hyperliquid-sol/trader_status.json"
+SYNC_INTERVAL = 5  # seconds
+
+
+def _sync_vps_status():
+    """Background thread: rsync trader_status.json from VPS every 5s."""
+    import time
+    while True:
+        try:
+            subprocess.run(
+                ["scp", "-q", "-o", "ConnectTimeout=3", "-i", VPS_KEY,
+                 f"{VPS_HOST}:{VPS_STATUS}", LIVE_STATUS],
+                timeout=8, capture_output=True,
+            )
+        except Exception:
+            pass
+        time.sleep(SYNC_INTERVAL)
+
+
 if __name__ == "__main__":
+    import threading
+    sync_thread = threading.Thread(target=_sync_vps_status, daemon=True)
+    sync_thread.start()
     print(f"Dashboard server on http://localhost:{PORT}")
-    print(f"Serving status from: sol, btc, eth bot folders")
+    print(f"Syncing VPS status every {SYNC_INTERVAL}s from {VPS_HOST}")
     server = http.server.HTTPServer(("", PORT), Handler)
     try:
         server.serve_forever()
